@@ -30,22 +30,23 @@ def webhook():
     price = data.get("price", 0)
     sl = data.get("sl", 0)
     tp1 = data.get("tp1", 0)
+    tp2 = data.get("tp2", 0)
+    tp3 = data.get("tp3", 0)
     timeframe = data.get("timeframe", "5m")
 
     # Формуємо запит до OpenAI для оцінки контексту ризику
     prompt = f"""
-    Ви виступаєте в ролі ризик-менеджера для торгового бота на золото (XAU/USD).
-    Надійшов новий сигнал:
+    Проаналізуй наступний торговий сигнал:
+    - Інструмент: {ticker}
     - Напрямок: {action}
     - Таймфрейм: {timeframe}
     - Ціна входу: {price}
     - Stop Loss: {sl}
-    - Take Profit 1: {tp1}
+    - Take Profit 1 (Quick Scalp): {tp1}
+    - Take Profit 2 (Main Target): {tp2}
+    - Take Profit 3 (Trend Target): {tp3}
 
-    Коротко оцініть цей сигнал (до 3 речень):
-    1. Наскільки адекватний співвідношення ризику (SL vs TP1).
-    2. Чи варто входити, враховуючи високу волатильність золота.
-    Дайте підсумковий вердикт: [CONFIRMED] або [REJECTED].
+    Дай короткий аналіз ризику (Risk-to-Reward для кожної цілі), оціни доцільність угоди враховуючи волатильність і винеси вердикт (APPROVED або REJECTED).
     """
 
     try:
@@ -64,6 +65,8 @@ def webhook():
         f"📍 **Вхід:** `{price}`\n"
         f"🛑 **SL:** `{sl}`\n"
         f"🎯 **TP1:** `{tp1}`\n\n"
+        f"🎯 **TP2:** `{tp2}`\n\n"
+        f"🎯 **TP3:** `{tp3}`\n\n"
         f"🤖 **Аналіз ШІ:**\n{ai_verdict}"
     )
     
