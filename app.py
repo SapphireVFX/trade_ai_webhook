@@ -82,7 +82,7 @@ def webhook():
     # Запускаємо обробку та відправку в Telegram у окремому фоновому потоці
     threading.Thread(target=process_signal, args=(data,)).start()
 
-    # Миттєво відповідаємо TradingView 200 OK
+    # Зверніть увагу на відступ тут (4 пробіли всередині функції webhook)
     return jsonify({"status": "success"}), 200
 
 if __name__ == "__main__":
