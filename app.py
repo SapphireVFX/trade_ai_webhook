@@ -34,30 +34,34 @@ def webhook():
     tp3 = data.get("tp3", 0)
     timeframe = data.get("timeframe", "5m")
 
-    # Формуємо запит до OpenAI для оцінки контексту ризику
-    prompt = f"""
-    Проаналізуй наступний торговий сигнал:
-    - Інструмент: {ticker}
-    - Напрямок: {action}
-    - Таймфрейм: {timeframe}
-    - Ціна входу: {price}
-    - Stop Loss: {sl}
-    - Take Profit 1 (Quick Scalp): {tp1}
-    - Take Profit 2 (Main Target): {tp2}
-    - Take Profit 3 (Trend Target): {tp3}
+    # Формуємо розширений запит до OpenAI для глибокого аналізу
+prompt = f"""
+Ти — експертний трейдер із Smart Money Concepts (SMC), FVG та алгоритмічного аналізу.
+Проаналізуй торговий сигнал:
+- Інструмент: {ticker}
+- Напрямок: {action}
+- Робочий таймфрейм: {timeframe}
+- Ціна входу: {price}
+- Stop Loss: {sl}
+- Take Profit 1: {tp1}
+- Take Profit 2: {tp2}
+- Take Profit 3: {tp3}
 
-    Дай короткий аналіз ризику (Risk-to-Reward для кожної цілі), оціни доцільність угоди враховуючи волатильність і винеси вердикт (APPROVED або REJECTED).
-    """
+Дай чіткий та лаконічний аналіз у 3 пунктах:
+1. **Оцінка структури та Risk-to-Reward:** розрахуй співвідношення R:R для TP1, TP2 та TP3.
+2. **Ймовірність відпрацювання (FVG / OB Контекст):** оціни закриття імбалансу, реакцію від зон попиту/пропозиції та специфіку волатильності для {ticker} на 5m.
+3. **ФІНАЛЬНИЙ ВЕРДИКТ:** Напиши чітко **[APPROVED]** або **[REJECTED]** і дай коротку рекомендацію (входити повним об'ємом, зменшеним чи пропустити).
+"""
 
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=150
-        )
-        ai_verdict = response.choices[0].message.content
-    except Exception as e:
-        ai_verdict = f"Помилка ШІ: {str(e)}"
+try:
+    response = client.chat_completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=400  # Збільшуємо ліміт, щоб відповідь була повноцінною!
+    )
+    ai_verdict = response.choices[0].message.content
+except Exception as e:
+    ai_verdict = f"Помилка ШІ: {str(e)}"
 
     # Формуємо красиве повідомлення в Telegram
     msg = (
