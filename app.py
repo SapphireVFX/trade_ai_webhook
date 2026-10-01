@@ -62,30 +62,43 @@ def get_formatted_symbol(symbol):
     """
     if not exchange:
         return symbol
+
     try:
         # Завантажуємо тільки swap (ф'ючерси)
         markets = exchange.load_markets(params={'type': 'swap'})
-        raw = symbol.replace('.P', '').replace('/', '').upper()
         
+        # Очищаємо вхідний символ від непотрібних суфіксів і двоеточій
+        raw = symbol.replace('.P', '').replace('/', '').replace(':', '').strip().upper()
+
         # 1. Пошук для Золота (XAU / GOLD)
         if "XAU" in raw or "GOLD" in raw:
             for m_symbol, market in markets.items():
                 if market.get('swap', False) and ("XAU" in m_symbol or "GOLD" in m_symbol):
                     return m_symbol
-            return "GOLD/USDT:USDT"
+            return "XAUT/USDT:USDT"
 
-        # 2. Пошук для Криптовалют (BTC, ETH тощо)
+        # 2. Пошук для Криптовалют (BTC, ETH, HYPE тощо)
         base_currency = raw.replace('USDT', '')
-        expected_pattern = f"{base_currency}/USDT"
         
+        # Спочатку шукаємо точний збіг серед ключових символів CCXT
         for m_symbol, market in markets.items():
-            if market.get('swap', False) and expected_pattern in m_symbol:
-                return m_symbol
-                
+            if market.get('swap', False):
+                # Очищаємо ключ біржі для порівняння (наприклад, HYPE/USDT:USDT -> HYPEUSDT)
+                clean_market_symbol = m_symbol.replace('.P', '').replace('/', '').replace(':', '').upper()
+                if clean_market_symbol == raw or clean_market_symbol.startswith(f"{base_currency}USDT"):
+                    return m_symbol
+
+        # Якщо в базі ринків не знайшлося точного збігу — використовуємо стандартний формат CCXT
         return f"{base_currency}/USDT:USDT"
+
     except Exception as e:
         print(f"Market Lookup Error: {str(e)}")
-        return "XAU/USDT:USDT" if ("XAU" in symbol or "GOLD" in symbol) else "BTC/USDT:USDT"
+        raw_clean = symbol.replace('.P', '').replace('/', '').replace(':', '').strip().upper()
+        if "XAU" in raw_clean or "GOLD" in raw_clean:
+            return "XAUT/USDT:USDT"
+        
+        base = raw_clean.replace('USDT', '')
+        return f"{base}/USDT:USDT"
 
 def close_opposite_positions(symbol, new_action):
     """Завжди закриває протилежні відкриті позиції при отриманні нового сигналу"""
