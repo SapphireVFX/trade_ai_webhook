@@ -57,27 +57,34 @@ def get_main_keyboard():
     }
 
 def get_formatted_symbol(symbol):
+    """
+    Знаходить точну назву ф'ючерсного символу BingX (Perpetual Swap)
+    """
     if not exchange:
         return symbol
     try:
-        markets = exchange.load_markets()
+        # Завантажуємо тільки swap (ф'ючерси)
+        markets = exchange.load_markets(params={'type': 'swap'})
         raw = symbol.replace('.P', '').replace('/', '').upper()
         
+        # 1. Пошук для Золота (XAU / GOLD)
         if "XAU" in raw or "GOLD" in raw:
-            for m_symbol in markets:
-                if "XAU" in m_symbol or "GOLD" in m_symbol:
+            for m_symbol, market in markets.items():
+                if market.get('swap', False) and ("XAU" in m_symbol or "GOLD" in m_symbol):
                     return m_symbol
             return "GOLD/USDT:USDT"
 
+        # 2. Пошук для Криптовалют (BTC, ETH тощо)
         base_currency = raw.replace('USDT', '')
         expected_pattern = f"{base_currency}/USDT"
         
-        for m_symbol in markets:
-            if expected_pattern in m_symbol:
+        for m_symbol, market in markets.items():
+            if market.get('swap', False) and expected_pattern in m_symbol:
                 return m_symbol
                 
         return f"{base_currency}/USDT:USDT"
-    except Exception:
+    except Exception as e:
+        print(f"Market Lookup Error: {str(e)}")
         return "XAU/USDT:USDT" if ("XAU" in symbol or "GOLD" in symbol) else "BTC/USDT:USDT"
 
 def close_opposite_positions(symbol, new_action):
