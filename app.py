@@ -33,28 +33,49 @@ def send_telegram(message):
     requests.post(url, json=payload)
 
 def get_formatted_symbol(symbol):
-    """Приведення тикера до стандарту BingX CCXT"""
-    raw_symbol = symbol.replace('.P', '')
-    if "XAU" in raw_symbol or "GOLD" in raw_symbol:
-        return "XAU/USDT"
-    return f"{raw_symbol[:-4]}/USDT:USDT" if raw_symbol.endswith("USDT") else f"{raw_symbol}/USDT:USDT"
+    """
+    Динамічно знаходить точну назву символу в базі BingX (для XAU/GOLD та Crypto)
+    """
+    if not exchange:
+        return symbol
+    try:
+        markets = exchange.load_markets()
+        raw = symbol.replace('.P', '').replace('/', '').upper()
+        
+        # 1. Пошук для Золота (XAU / GOLD)
+        if "XAU" in raw or "GOLD" in raw:
+            for m_symbol in markets:
+                if "XAU" in m_symbol or "GOLD" in m_symbol:
+                    return m_symbol
+            return "GOLD/USDT:USDT"
 
-def close_opposite_positions(formatted_symbol, new_action):
+        # 2. Пошук для Криптовалют (BTC, ETH тощо)
+        base_currency = raw.replace('USDT', '')
+        expected_pattern = f"{base_currency}/USDT"
+        
+        for m_symbol in markets:
+            if expected_pattern in m_symbol:
+                return m_symbol
+                
+        return f"{base_currency}/USDT:USDT"
+    except Exception:
+        return "XAU/USDT:USDT" if ("XAU" in symbol or "GOLD" in symbol) else "BTC/USDT:USDT"
+        
+def close_opposite_positions(symbol, new_action):
     """Завжди закриває протилежні відкриті позиції при отриманні нового сигналу"""
     if not exchange:
         return ""
     try:
+        formatted_symbol = get_formatted_symbol(symbol)
         positions = exchange.fetch_positions([formatted_symbol])
         opposite_side = 'short' if new_action.upper() == 'BUY' else 'long'
         closed_info = ""
 
         for pos in positions:
-            # Якщо є відкрита протилежна позиція з об'ємом > 0
             if pos['symbol'] == formatted_symbol and pos['side'].lower() == opposite_side and float(pos['contracts']) > 0:
                 amount = float(pos['contracts'])
                 close_side = 'buy' if opposite_side == 'short' else 'sell'
                 
-                # Закриваємо позицію ринковим ордером
                 exchange.create_order(
                     symbol=formatted_symbol,
                     type='market',
@@ -68,7 +89,7 @@ def close_opposite_positions(formatted_symbol, new_action):
         return f"\n⚠️ Помилка закриття попередньої позиції: {str(e)}"
 
 def execute_bingx_trade(symbol, action, price, sl, tp1, tp2):
-    """Автоматична торгівля на BingX з трьома цілями та перенесенням у беззбиток"""
+    """Автоматична торгівля на BingX"""
     if not exchange:
         return "⚠️ BingX API ключі не знайдені в Environment Variables."
     
@@ -79,6 +100,7 @@ def execute_bingx_trade(symbol, action, price, sl, tp1, tp2):
         margin_usdt = float(os.environ.get("TRADE_MARGIN_USDT", 10))
         leverage = int(os.environ.get("TRADE_LEVERAGE", 10))
 
+        # Встановлюємо плече
         try:
             exchange.set_leverage(leverage, formatted_symbol)
         except Exception:
@@ -87,7 +109,12 @@ def execute_bingx_trade(symbol, action, price, sl, tp1, tp2):
         position_size_usdt = margin_usdt * leverage
         amount = position_size_usdt / price
 
-        # Часткове фіксування: 33% на TP1, 33% на TP2, залишок 34% тягнеться до зворотного сигналу
+        # Точне округлення об'єму для біржі
+        try:
+            amount = float(exchange.amount_to_precision(formatted_symbol, amount))
+        except Exception:
+            pass
+
         params = {
             'stopLoss': {'triggerPrice': float(sl)},
             'takeProfit': {'triggerPrice': float(tp1)}
@@ -102,10 +129,11 @@ def execute_bingx_trade(symbol, action, price, sl, tp1, tp2):
         )
         return (
             f"✅ **Угоду успішно відкрито на BingX!**\n"
+            f"Точний інструмент: `{formatted_symbol}`\n"
             f"Об'єм: `${position_size_usdt}` (Маржа: `${margin_usdt}` x{leverage})\n"
-            f"🎯 TP1 (33%) set at `{tp1}` (SL will move to BE)\n"
-            f"🎯 TP2 (33%) set at `{tp2}`\n"
-            f"📈 Залишок (34%) буде утримуватись до зворотного сигналу.\n"
+            f"🎯 TP1 (33%): `{tp1}`\n"
+            f"🎯 TP2 (33%): `{tp2}`\n"
+            f"📈 Залишок (34%) утримується до зворотного сигналу.\n"
             f"ID Ордера: `{order['id']}`"
         )
     except Exception as e:
