@@ -115,44 +115,60 @@ def close_opposite_positions(symbol, new_action):
         return f"\n⚠️ Помилка закриття попередньої позиції: {str(e)}"
 
 def execute_bingx_trade(symbol, action, price, sl, tp1, tp2):
+    """Автоматична торгівля на ф'ючерсах BingX (з підтримкою Hedge Mode)"""
     if not exchange:
         return "⚠️ BingX API ключі не знайдені в Environment Variables."
     
     try:
         formatted_symbol = get_formatted_symbol(symbol)
-        side = 'buy' if action.upper() == 'BUY' else 'sell'
+        is_buy = action.upper() == 'BUY'
+        side = 'buy' if is_buy else 'sell'
+        position_side = 'LONG' if is_buy else 'SHORT'  # Для Hedge Mode на BingX
 
         margin_usdt = float(os.environ.get("TRADE_MARGIN_USDT", 10))
         leverage = int(os.environ.get("TRADE_LEVERAGE", 10))
 
+        # 1. Встановлюємо плече
         try:
             exchange.set_leverage(leverage, formatted_symbol)
         except Exception:
             pass
 
         position_size_usdt = margin_usdt * leverage
-        amount = position_size_usdt / price
+        
+        # 2. Розрахунок контракту з урахуванням розміру лоту
+        market_info = exchange.market(formatted_symbol)
+        contract_size = float(market_info.get('contractSize', 1.0))
+        
+        amount = (position_size_usdt / price) / contract_size
 
         try:
             amount = float(exchange.amount_to_precision(formatted_symbol, amount))
         except Exception:
             pass
 
+        # 3. Створення ф'ючерсного ордера в Hedge Mode
         order = exchange.create_order(
             symbol=formatted_symbol,
             type='market',
             side=side,
-            amount=amount
+            amount=amount,
+            params={'positionSide': position_side}
         )
 
+        # 4. Виставляємо Stop Loss та TP1 (33%)
         try:
-            sl_side = 'sell' if side == 'buy' else 'buy'
+            sl_side = 'sell' if is_buy else 'buy'
             exchange.create_order(
                 symbol=formatted_symbol,
                 type='STOP_MARKET',
                 side=sl_side,
                 amount=amount,
-                params={'stopPrice': float(sl), 'reduceOnly': True}
+                params={
+                    'stopPrice': float(sl),
+                    'positionSide': position_side,
+                    'reduceOnly': True
+                }
             )
             tp1_amount = float(exchange.amount_to_precision(formatted_symbol, amount * 0.33))
             exchange.create_order(
@@ -160,14 +176,18 @@ def execute_bingx_trade(symbol, action, price, sl, tp1, tp2):
                 type='TAKE_PROFIT_MARKET',
                 side=sl_side,
                 amount=tp1_amount,
-                params={'stopPrice': float(tp1), 'reduceOnly': True}
+                params={
+                    'stopPrice': float(tp1),
+                    'positionSide': position_side,
+                    'reduceOnly': True
+                }
             )
         except Exception as tp_err:
             print(f"SL/TP Setting Error: {str(tp_err)}")
 
         return (
-            f"✅ **Угоду успішно відкрито на BingX!**\n"
-            f"Точний інструмент: `{formatted_symbol}`\n"
+            f"✅ **Угоду успішно відкрито на BingX Futures!**\n"
+            f"Інструмент: `{formatted_symbol}` ({position_side})\n"
             f"Об'єм: `${position_size_usdt}` (Маржа: `${margin_usdt}` x{leverage})\n"
             f"🎯 TP1 (33%): `{tp1}`\n"
             f"🎯 TP2 (33%): `{tp2}`\n"
