@@ -33,30 +33,33 @@ def send_telegram(message):
     requests.post(url, json=payload)
 
 def execute_bingx_trade(symbol, action, price, sl, tp1):
-    """Автоматична торгівля на BingX з налаштуваннями з Render Environment Variables"""
+    """Автоматична торгівля на BingX з обробкою крипти та Золота (XAU)"""
     if not exchange:
-        return "⚠️ BingX API ключі не знайдені в Environment Variables."
+        return "⚠️️ BingX API ключі не знайдені в Environment Variables."
     
     try:
-        # Приводимо тикер до формату CCXT (наприклад, BTC/USDT:USDT)
-        formatted_symbol = symbol.replace('.P', '').replace('USDT', '/USDT:USDT')
+        raw_symbol = symbol.replace('.P', '')
+        
+        # Форматування символів під BingX CCXT
+        if "XAU" in raw_symbol or "GOLD" in raw_symbol:
+            formatted_symbol = "XAU/USDT"
+        else:
+            formatted_symbol = f"{raw_symbol[:-4]}/USDT:USDT" if raw_symbol.endswith("USDT") else f"{raw_symbol}/USDT:USDT"
+
         side = 'buy' if action.upper() == 'BUY' else 'sell'
 
-        # Отримуємо налаштування маржі та плеча зі змінних середовища Render
         margin_usdt = float(os.environ.get("TRADE_MARGIN_USDT", 10))
         leverage = int(os.environ.get("TRADE_LEVERAGE", 10))
 
-        # Встановлюємо плече на BingX
+        # Спроба встановити плече
         try:
             exchange.set_leverage(leverage, formatted_symbol)
         except Exception:
             pass
 
-        # Розрахунок об'єму позиції
         position_size_usdt = margin_usdt * leverage
         amount = position_size_usdt / price
 
-        # Виставляємо ринковий ордер із прив'язаними SL та TP1
         params = {
             'stopLoss': {'triggerPrice': float(sl)},
             'takeProfit': {'triggerPrice': float(tp1)}
