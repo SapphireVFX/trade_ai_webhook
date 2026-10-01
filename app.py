@@ -115,14 +115,15 @@ def close_opposite_positions(symbol, new_action):
         return f"\n⚠️ Помилка закриття попередньої позиції: {str(e)}"
 
 def execute_bingx_trade(symbol, action, price, sl, tp1, tp2):
-    """Автоматична торгівля на ф'ючерсах BingX із гарантованим виставленням SL/TP"""
+    """Автоматична торгівля на ф'ючерсах BingX у Hedge Mode з виставленням SL/TP"""
     if not exchange:
-        return "⚠️ BingX API ключі не знайдені в Environment Variables."
+        return "⚠️️ BingX API ключі не знайдені в Environment Variables."
     
     try:
         formatted_symbol = get_formatted_symbol(symbol)
         is_buy = action.upper() == 'BUY'
         side = 'buy' if is_buy else 'sell'
+        sl_side = 'sell' if is_buy else 'buy'
         position_side = 'LONG' if is_buy else 'SHORT'
 
         margin_usdt = float(os.environ.get("TRADE_MARGIN_USDT", 10))
@@ -136,7 +137,7 @@ def execute_bingx_trade(symbol, action, price, sl, tp1, tp2):
 
         position_size_usdt = margin_usdt * leverage
         
-        # 2. Розрахунок контракту та округлення цін
+        # 2. Розрахунок кількості контрактів та округлення цін
         market_info = exchange.market(formatted_symbol)
         contract_size = float(market_info.get('contractSize', 1.0))
         
@@ -150,53 +151,61 @@ def execute_bingx_trade(symbol, action, price, sl, tp1, tp2):
             sl_price_formatted = float(sl)
             tp1_price_formatted = float(tp1)
 
-        # 3. Формуємо параметри із прив'язаними SL і TP1 прямо в основний ордер
-        order_params = {
-            'positionSide': position_side,
-            'stopLoss': {
-                'triggerPrice': sl_price_formatted,
-                'type': 'market'
-            },
-            'takeProfit': {
-                'triggerPrice': tp1_price_formatted,
-                'type': 'market'
-            }
-        }
-
-        # Створення ф'ючерсного ордера
+        # 3. Вхід у ринкову позицію
         order = exchange.create_order(
             symbol=formatted_symbol,
             type='market',
             side=side,
             amount=amount,
-            params=order_params
+            params={'positionSide': position_side}
         )
+
+        # 4. Виставляємо окремий Stop Loss
+        sl_report = ""
+        try:
+            exchange.create_order(
+                symbol=formatted_symbol,
+                type='STOP_MARKET',
+                side=sl_side,
+                amount=amount,
+                params={
+                    'stopPrice': sl_price_formatted,
+                    'positionSide': position_side
+                }
+            )
+            sl_report = f"🛑 **SL зафіксовано:** `{sl_price_formatted}`\n"
+        except Exception as sl_err:
+            sl_report = f"⚠️ **Помилка виставлення SL:** {str(sl_err)}\n"
+
+        # 5. Виставляємо окремий Take Profit 1 (33% об'єму)
+        tp_report = ""
+        try:
+            tp1_amount = float(exchange.amount_to_precision(formatted_symbol, amount * 0.33))
+            exchange.create_order(
+                symbol=formatted_symbol,
+                type='TAKE_PROFIT_MARKET',
+                side=sl_side,
+                amount=tp1_amount,
+                params={
+                    'stopPrice': tp1_price_formatted,
+                    'positionSide': position_side
+                }
+            )
+            tp_report = f"🎯 **TP1 зафіксовано (33%):** `{tp1_price_formatted}`\n"
+        except Exception as tp_err:
+            tp_report = f"⚠️ **Помилка виставлення TP1:** {str(tp_err)}\n"
 
         return (
             f"✅ **Угоду успішно відкрито на BingX Futures!**\n"
             f"Інструмент: `{formatted_symbol}` ({position_side})\n"
             f"Об'єм: `${position_size_usdt}` (Маржа: `${margin_usdt}` x{leverage})\n"
-            f"🛑 **SL встановлено:** `{sl_price_formatted}`\n"
-            f"🎯 **TP1 встановлено:** `{tp1_price_formatted}`\n"
+            f"{sl_report}"
+            f"{tp_report}"
+            f"📈 Залишок (67%) утримується за стратегією.\n"
             f"ID Ордера: `{order['id']}`"
         )
     except Exception as e:
-        # Резервний виклик (якщо розширені параметри не підтрималися для конкретного тикера)
-        try:
-            order = exchange.create_order(
-                symbol=formatted_symbol,
-                type='market',
-                side=side,
-                amount=amount,
-                params={'positionSide': position_side}
-            )
-            return (
-                f"✅ **Угоду відкрито (без авто-SL/TP):** `{formatted_symbol}`\n"
-                f"⚠️ Примітка: Виставте SL ({sl}) та TP ({tp1}) вручну на BingX.\n"
-                f"Деталі помилки SL/TP: {str(e)}"
-            )
-        except Exception as err:
-            return f"❌ **Помилка відкриття угоди на BingX:** {str(err)}"
+        return f"❌ **Помилка відкриття угоди на BingX:** {str(e)}"
 
 def process_signal(data):
     global TRADING_ENABLED
