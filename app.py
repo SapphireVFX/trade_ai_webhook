@@ -88,6 +88,19 @@ def close_opposite_positions(symbol, new_action):
     except Exception as e:
         return f"\n⚠️ Помилка закриття попередньої позиції: {str(e)}"
 
+# Ініціалізація BingX з часовим вікном recvWindow для стабільності підпису
+exchange = None
+if BINGX_API_KEY and BINGX_SECRET_KEY:
+    exchange = ccxt.bingx({
+        'apiKey': BINGX_API_KEY.strip(),
+        'secret': BINGX_SECRET_KEY.strip(),
+        'options': {
+            'defaultType': 'swap',
+            'recvWindow': 10000  # Збільшуємо часове вікно для верифікації підпису
+        },
+        'enableRateLimit': True
+    })
+
 def execute_bingx_trade(symbol, action, price, sl, tp1, tp2):
     """Автоматична торгівля на BingX"""
     if not exchange:
@@ -100,7 +113,7 @@ def execute_bingx_trade(symbol, action, price, sl, tp1, tp2):
         margin_usdt = float(os.environ.get("TRADE_MARGIN_USDT", 10))
         leverage = int(os.environ.get("TRADE_LEVERAGE", 10))
 
-        # Встановлюємо плече
+        # 1. Встановлюємо плече
         try:
             exchange.set_leverage(leverage, formatted_symbol)
         except Exception:
@@ -109,24 +122,45 @@ def execute_bingx_trade(symbol, action, price, sl, tp1, tp2):
         position_size_usdt = margin_usdt * leverage
         amount = position_size_usdt / price
 
-        # Точне округлення об'єму для біржі
+        # 2. Округлення об'єму
         try:
             amount = float(exchange.amount_to_precision(formatted_symbol, amount))
         except Exception:
             pass
 
-        params = {
-            'stopLoss': {'triggerPrice': float(sl)},
-            'takeProfit': {'triggerPrice': float(tp1)}
-        }
-        
+        # 3. Відкриваємо базовий ринковий ордер (Market)
         order = exchange.create_order(
             symbol=formatted_symbol,
             type='market',
             side=side,
-            amount=amount,
-            params=params
+            amount=amount
         )
+
+        # 4. Окремо ставимо Stop Loss та Take Profit 1 (щоб не псувати підпис основного ордера)
+        try:
+            sl_side = 'sell' if side == 'buy' else 'buy'
+            
+            # Виставляємо Stop Loss
+            exchange.create_order(
+                symbol=formatted_symbol,
+                type='STOP_MARKET',
+                side=sl_side,
+                amount=amount,
+                params={'stopPrice': float(sl), 'reduceOnly': True}
+            )
+
+            # Виставляємо Take Profit 1 (на 33% об'єму)
+            tp1_amount = float(exchange.amount_to_precision(formatted_symbol, amount * 0.33))
+            exchange.create_order(
+                symbol=formatted_symbol,
+                type='TAKE_PROFIT_MARKET',
+                side=sl_side,
+                amount=tp1_amount,
+                params={'stopPrice': float(tp1), 'reduceOnly': True}
+            )
+        except Exception as tp_err:
+            print(f"Помилка встановлення SL/TP: {str(tp_err)}")
+
         return (
             f"✅ **Угоду успішно відкрито на BingX!**\n"
             f"Точний інструмент: `{formatted_symbol}`\n"
