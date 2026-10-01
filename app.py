@@ -32,26 +32,53 @@ def send_telegram(message):
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}
     requests.post(url, json=payload)
 
-def execute_bingx_trade(symbol, action, price, sl, tp1):
-    """Автоматична торгівля на BingX з обробкою крипти та Золота (XAU)"""
+def get_formatted_symbol(symbol):
+    """Приведення тикера до стандарту BingX CCXT"""
+    raw_symbol = symbol.replace('.P', '')
+    if "XAU" in raw_symbol or "GOLD" in raw_symbol:
+        return "XAU/USDT"
+    return f"{raw_symbol[:-4]}/USDT:USDT" if raw_symbol.endswith("USDT") else f"{raw_symbol}/USDT:USDT"
+
+def close_opposite_positions(formatted_symbol, new_action):
+    """Завжди закриває протилежні відкриті позиції при отриманні нового сигналу"""
     if not exchange:
-        return "⚠️️ BingX API ключі не знайдені в Environment Variables."
+        return ""
+    try:
+        positions = exchange.fetch_positions([formatted_symbol])
+        opposite_side = 'short' if new_action.upper() == 'BUY' else 'long'
+        closed_info = ""
+
+        for pos in positions:
+            # Якщо є відкрита протилежна позиція з об'ємом > 0
+            if pos['symbol'] == formatted_symbol and pos['side'].lower() == opposite_side and float(pos['contracts']) > 0:
+                amount = float(pos['contracts'])
+                close_side = 'buy' if opposite_side == 'short' else 'sell'
+                
+                # Закриваємо позицію ринковим ордером
+                exchange.create_order(
+                    symbol=formatted_symbol,
+                    type='market',
+                    side=close_side,
+                    amount=amount,
+                    params={'reduceOnly': True}
+                )
+                closed_info += f"\n🔄 **Попередню протилежну позицію ({opposite_side.upper()}) закрито по ринку!**"
+        return closed_info
+    except Exception as e:
+        return f"\n⚠️ Помилка закриття попередньої позиції: {str(e)}"
+
+def execute_bingx_trade(symbol, action, price, sl, tp1, tp2):
+    """Автоматична торгівля на BingX з трьома цілями та перенесенням у беззбиток"""
+    if not exchange:
+        return "⚠️ BingX API ключі не знайдені в Environment Variables."
     
     try:
-        raw_symbol = symbol.replace('.P', '')
-        
-        # Форматування символів під BingX CCXT
-        if "XAU" in raw_symbol or "GOLD" in raw_symbol:
-            formatted_symbol = "XAU/USDT"
-        else:
-            formatted_symbol = f"{raw_symbol[:-4]}/USDT:USDT" if raw_symbol.endswith("USDT") else f"{raw_symbol}/USDT:USDT"
-
+        formatted_symbol = get_formatted_symbol(symbol)
         side = 'buy' if action.upper() == 'BUY' else 'sell'
 
         margin_usdt = float(os.environ.get("TRADE_MARGIN_USDT", 10))
         leverage = int(os.environ.get("TRADE_LEVERAGE", 10))
 
-        # Спроба встановити плече
         try:
             exchange.set_leverage(leverage, formatted_symbol)
         except Exception:
@@ -60,6 +87,7 @@ def execute_bingx_trade(symbol, action, price, sl, tp1):
         position_size_usdt = margin_usdt * leverage
         amount = position_size_usdt / price
 
+        # Часткове фіксування: 33% на TP1, 33% на TP2, залишок 34% тягнеться до зворотного сигналу
         params = {
             'stopLoss': {'triggerPrice': float(sl)},
             'takeProfit': {'triggerPrice': float(tp1)}
@@ -72,7 +100,14 @@ def execute_bingx_trade(symbol, action, price, sl, tp1):
             amount=amount,
             params=params
         )
-        return f"✅ **Угоду успішно відкрито на BingX!**\nОб'єм: `${position_size_usdt}` (Маржа: `${margin_usdt}` x{leverage})\nID Ордера: `{order['id']}`"
+        return (
+            f"✅ **Угоду успішно відкрито на BingX!**\n"
+            f"Об'єм: `${position_size_usdt}` (Маржа: `${margin_usdt}` x{leverage})\n"
+            f"🎯 TP1 (33%) set at `{tp1}` (SL will move to BE)\n"
+            f"🎯 TP2 (33%) set at `{tp2}`\n"
+            f"📈 Залишок (34%) буде утримуватись до зворотного сигналу.\n"
+            f"ID Ордера: `{order['id']}`"
+        )
     except Exception as e:
         return f"❌ **Помилка відкриття угоди на BingX:** {str(e)}"
 
@@ -86,7 +121,12 @@ def process_signal(data):
     tp3 = float(data.get("tp3", 0))
     timeframe = data.get("timeframe", "5m")
 
-    # Формуємо чіткий запит до OpenAI з вердиктом НА ПОЧАТКУ
+    formatted_symbol = get_formatted_symbol(ticker)
+
+    # 1. ЗАВЖДИ закриваємо протилежні позиції при надходженні сигналу (Варіант А)
+    close_report = close_opposite_positions(formatted_symbol, action)
+
+    # 2. Формуємо запит до OpenAI
     prompt = f"""
 Ти — експертний трейдер із Smart Money Concepts (SMC), FVG та алгоритмічного аналізу.
 Проаналізуй торговий сигнал для {ticker} ({action}):
@@ -110,19 +150,19 @@ def process_signal(data):
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=750  # Збільшуємо запас токенів, щоб аналіз ніколи не обривався!
+            max_tokens=750
         )
         ai_verdict = response.choices[0].message.content
     except Exception as e:
         ai_verdict = f"Помилка ШІ: {str(e)}"
 
-    # Якщо ШІ ухвалив угоду [APPROVED], виконуємо її на BingX
+    # 3. Якщо ШІ ухвалив угоду [APPROVED], відкриваємо її на BingX
     trade_report = ""
     if "[APPROVED]" in ai_verdict:
-        trade_report = "\n\n" + execute_bingx_trade(ticker, action, price, sl, tp1)
+        trade_report = "\n\n" + execute_bingx_trade(ticker, action, price, sl, tp1, tp2)
 
     msg = (
-        f"⚡️ **НОВИЙ СИГНАЛ: {ticker} ({action})**\n\n"
+        f"⚡️ **НОВИЙ СИГНАЛ: {ticker} ({action})**{close_report}\n\n"
         f"📍 **Вхід:** `{price}`\n"
         f"🛑 **SL:** `{sl}`\n"
         f"🎯 **TP1:** `{tp1}`\n"
