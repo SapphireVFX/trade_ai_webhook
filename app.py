@@ -7,7 +7,7 @@ from openai import OpenAI
 
 app = Flask(__name__)
 
-# Ключі середовища
+# Ключі середовища з Render
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
@@ -33,7 +33,7 @@ def send_telegram(message):
     requests.post(url, json=payload)
 
 def execute_bingx_trade(symbol, action, price, sl, tp1):
-    """Функція автоматичного відкриття ордера на BingX"""
+    """Автоматична торгівля на BingX з налаштуваннями з Render Environment Variables"""
     if not exchange:
         return "⚠️ BingX API ключі не знайдені в Environment Variables."
     
@@ -42,19 +42,21 @@ def execute_bingx_trade(symbol, action, price, sl, tp1):
         formatted_symbol = symbol.replace('.P', '').replace('USDT', '/USDT:USDT')
         side = 'buy' if action.upper() == 'BUY' else 'sell'
 
-        # Встановлюємо плече (наприклад, 10x)
+        # Отримуємо налаштування маржі та плеча зі змінних середовища Render
+        margin_usdt = float(os.environ.get("TRADE_MARGIN_USDT", 10))
+        leverage = int(os.environ.get("TRADE_LEVERAGE", 10))
+
+        # Встановлюємо плече на BingX
         try:
-            exchange.set_leverage(10, formatted_symbol)
+            exchange.set_leverage(leverage, formatted_symbol)
         except Exception:
             pass
 
-        # Розрахунок об'єму (наприклад, фіксований ордер на $10)
-        margin_usdt = 10 
-        leverage = 10
+        # Розрахунок об'єму позиції
         position_size_usdt = margin_usdt * leverage
         amount = position_size_usdt / price
 
-        # Відкриваємо ринкову позицію з автоматичним SL та TP1
+        # Виставляємо ринковий ордер із прив'язаними SL та TP1
         params = {
             'stopLoss': {'triggerPrice': float(sl)},
             'takeProfit': {'triggerPrice': float(tp1)}
@@ -67,7 +69,7 @@ def execute_bingx_trade(symbol, action, price, sl, tp1):
             amount=amount,
             params=params
         )
-        return f"✅ **Угоду успішно відкрито на BingX!**\nID Ордера: `{order['id']}`"
+        return f"✅ **Угоду успішно відкрито на BingX!**\nОб'єм: `${position_size_usdt}` (Маржа: `${margin_usdt}` x{leverage})\nID Ордера: `{order['id']}`"
     except Exception as e:
         return f"❌ **Помилка відкриття угоди на BingX:** {str(e)}"
 
@@ -109,7 +111,7 @@ def process_signal(data):
     except Exception as e:
         ai_verdict = f"Помилка ШІ: {str(e)}"
 
-    # Якщо ШІ ухвалив угоду [APPROVED], відправляємо ордер на BingX
+    # Якщо ШІ ухвалив угоду [APPROVED], виконуємо її на BingX
     trade_report = ""
     if "[APPROVED]" in ai_verdict:
         trade_report = "\n\n" + execute_bingx_trade(ticker, action, price, sl, tp1)
