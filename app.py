@@ -107,22 +107,30 @@ def close_opposite_positions(symbol, new_action):
     try:
         formatted_symbol = get_formatted_symbol(symbol)
         positions = exchange.fetch_positions([formatted_symbol])
-        opposite_side = 'short' if new_action.upper() == 'BUY' else 'long'
+        
+        # Визначаємо, яку позицію треба закрити (якщо прийшов BUY — закриваємо SHORT, якщо SELL — LONG)
+        target_position_side = 'SHORT' if new_action.upper() == 'BUY' else 'LONG'
+        close_side = 'buy' if target_position_side == 'SHORT' else 'sell'
         closed_info = ""
 
         for pos in positions:
-            if pos['symbol'] == formatted_symbol and pos['side'].lower() == opposite_side and float(pos['contracts']) > 0:
-                amount = float(pos['contracts'])
-                close_side = 'buy' if opposite_side == 'short' else 'sell'
-                
+            pos_side = str(pos.get('side', '')).upper()
+            contracts = float(pos.get('contracts', 0) or 0)
+            
+            if pos['symbol'] == formatted_symbol and pos_side == target_position_side and contracts > 0:
+                # Надсилаємо ордер закриття з правильним positionSide для Hedge Mode
                 exchange.create_order(
                     symbol=formatted_symbol,
                     type='market',
                     side=close_side,
-                    amount=amount,
-                    params={'reduceOnly': True}
+                    amount=contracts,
+                    params={
+                        'positionSide': target_position_side,  # Обов'язково LONG або SHORT у верхньому регістрі
+                        'reduceOnly': True
+                    }
                 )
-                closed_info += f"\n🔄 **Попередню протилежну позицію ({opposite_side.upper()}) закрито по ринку!**"
+                closed_info += f"\n🔄 **Попередню протилежну позицію ({target_position_side}) закрито по ринку!**"
+                
         return closed_info
     except Exception as e:
         return f"\n⚠️ Помилка закриття попередньої позиції: {str(e)}"
