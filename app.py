@@ -3,7 +3,7 @@ import json
 import requests  
 import threading  
 import ccxt  
-from flask import Flask, request, jsonify  
+from flask import Flask, request, jsonify, redirect  
 from openai import OpenAI  
 
 app = Flask(__name__)  
@@ -12,8 +12,15 @@ app = Flask(__name__)
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")  
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")  
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")  
+
+# BingX Credentials
 BINGX_API_KEY = os.environ.get("BINGX_API_KEY")  
 BINGX_SECRET_KEY = os.environ.get("BINGX_SECRET_KEY")  
+
+# cTrader Credentials
+CTRADER_CLIENT_ID = os.environ.get("CTRADER_CLIENT_ID")
+CTRADER_CLIENT_SECRET = os.environ.get("CTRADER_CLIENT_SECRET")
+CTRADER_ACCOUNT_ID = os.environ.get("CTRADER_ACCOUNT_ID")
 
 client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None  
 
@@ -22,8 +29,8 @@ client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 # ----------------------------------------------------
 TRADING_FILE = "trading_state.txt"
 SYMBOLS_FILE = "symbols_config.json"
+CTRADER_TOKEN_FILE = "ctrader_token.json"
 
-# Базовий список монет за замовчуванням (BTC та XAU увімкнено, інші - ні)
 DEFAULT_SYMBOLS_CONFIG = {
     "BTC": True,
     "XAU": True,
@@ -33,7 +40,6 @@ DEFAULT_SYMBOLS_CONFIG = {
 }
 
 def is_trading_enabled():
-    """Перевіряє загальний стан торгівлі з файлу"""
     if os.path.exists(TRADING_FILE):
         try:
             with open(TRADING_FILE, "r") as f:
@@ -43,7 +49,6 @@ def is_trading_enabled():
     return True
 
 def set_trading_state(state: bool):
-    """Зберігає загальний стан торгівлі у файл"""
     try:
         with open(TRADING_FILE, "w") as f:
             f.write(str(state))
@@ -51,12 +56,10 @@ def set_trading_state(state: bool):
         print(f"Помилка збереження стану торгівлі: {str(e)}")
 
 def load_symbols_config():
-    """Завантажує налаштування монет з JSON файлу"""
     if os.path.exists(SYMBOLS_FILE):
         try:
             with open(SYMBOLS_FILE, "r") as f:
                 config = json.load(f)
-                # Додаємо дефолтні ключі, якщо з'явилися нові монети
                 for k, v in DEFAULT_SYMBOLS_CONFIG.items():
                     if k not in config:
                         config[k] = v
@@ -66,7 +69,6 @@ def load_symbols_config():
     return DEFAULT_SYMBOLS_CONFIG.copy()
 
 def save_symbols_config(config):
-    """Зберігає налаштування монет у JSON файл"""
     try:
         with open(SYMBOLS_FILE, "w") as f:
             json.dump(config, f, indent=2)
@@ -74,11 +76,8 @@ def save_symbols_config(config):
         print(f"Помилка збереження конфігурації монет: {str(e)}")
 
 def is_symbol_auto_trade_enabled(ticker):
-    """Перевіряє, чи увімкнена автоторгівля для конкретного тикера"""
     config = load_symbols_config()
     raw = ticker.replace(".P", "").replace("/", "").replace(":", "").upper()
-    
-    # Пошук відповідності тикера в конфігу
     for sym_key, enabled in config.items():
         if sym_key.upper() in raw:
             return enabled
@@ -111,7 +110,6 @@ def send_telegram(message, reply_markup=None):
     requests.post(url, json=payload)  
 
 def get_main_keyboard():  
-    """Створення нижнього меню у Telegram"""  
     trading_on = is_trading_enabled()
     return {  
         "keyboard": [  
@@ -122,24 +120,19 @@ def get_main_keyboard():
     }  
 
 def get_symbols_inline_keyboard():
-    """Формує інтерактивне Inline-меню для вибору монет"""
     config = load_symbols_config()
     inline_keyboard = []
-    
     for sym_key, enabled in config.items():
         status_icon = "🟢" if enabled else "🔴"
         action_text = "Автоторгівля" if enabled else "Тільки сигнал"
         btn_text = f"{status_icon} {sym_key} ({action_text})"
         callback_data = f"toggle_sym_{sym_key}"
         inline_keyboard.append([{"text": btn_text, "callback_data": callback_data}])
-        
     return {"inline_keyboard": inline_keyboard}
 
 def get_formatted_symbol(symbol):  
-    """Знаходить точну назву ф'ючерсного символу BingX (Perpetual Swap)"""  
     if not exchange:  
         return symbol  
-  
     try:  
         markets = exchange.load_markets(params={'type': 'swap'})  
         raw = symbol.replace('.P', '').replace('/', '').replace(':', '').strip().upper()  
@@ -156,9 +149,7 @@ def get_formatted_symbol(symbol):
                 clean_market_symbol = m_symbol.replace('.P', '').replace('/', '').replace(':', '').upper()  
                 if clean_market_symbol == raw or clean_market_symbol.startswith(f"{base_currency}USDT"):  
                     return m_symbol  
-  
         return f"{base_currency}/USDT:USDT"  
-  
     except Exception as e:  
         print(f"Market Lookup Error: {str(e)}")  
         raw_clean = symbol.replace('.P', '').replace('/', '').replace(':', '').strip().upper()  
@@ -168,13 +159,11 @@ def get_formatted_symbol(symbol):
         return f"{base}/USDT:USDT"  
 
 def close_opposite_positions(symbol, new_action):  
-    """Завжди закриває протилежні відкриті позиції у Hedge Mode"""  
     if not exchange:  
         return ""  
     try:  
         formatted_symbol = get_formatted_symbol(symbol)  
         positions = exchange.fetch_positions([formatted_symbol])  
-        
         target_position_side = 'SHORT' if new_action.upper() == 'BUY' else 'LONG'
         close_side = 'buy' if target_position_side == 'SHORT' else 'sell'
         closed_info = ""  
@@ -182,7 +171,6 @@ def close_opposite_positions(symbol, new_action):
         for pos in positions:  
             pos_side = str(pos.get('side', '')).upper()
             contracts = float(pos.get('contracts', 0) or 0)
-
             if pos['symbol'] == formatted_symbol and pos_side == target_position_side and contracts > 0:  
                 exchange.create_order(  
                     symbol=formatted_symbol,  
@@ -197,16 +185,14 @@ def close_opposite_positions(symbol, new_action):
                 closed_info += f"\n🔄 **Попередню протилежну позицію ({target_position_side}) закрито по ринку!**"  
         return closed_info  
     except Exception as e:  
-        return f"\n⚠️️ Помилка закриття попередньої позиції: {str(e)}"  
+        return f"\n⚠ Помилка закриття попередньої позиції: {str(e)}"  
 
 def execute_move_be(symbol, entry_price):
-    """Модифікація Stop Loss на рівень безубитку (BE) на BingX"""
     if not exchange:
         return "⚠️ BingX API ключі відсутні."
     try:
         formatted_symbol = get_formatted_symbol(symbol)
         positions = exchange.fetch_positions([formatted_symbol])
-        
         be_reports = []
         for pos in positions:
             contracts = float(pos.get('contracts', 0) or 0)
@@ -237,18 +223,13 @@ def execute_move_be(symbol, entry_price):
                 )
                 be_reports.append(f"🛡 **Stop Loss перенесено в BE (`{sl_price_formatted}`) для {formatted_symbol} ({pos_side})**")
         
-        if be_reports:
-            return "\n".join(be_reports)
-        else:
-            return f"ℹ️ Для {formatted_symbol} не знайдено відкритих позицій для переносу в BE."
+        return "\n".join(be_reports) if be_reports else f"ℹ️ Для {formatted_symbol} не знайдено відкритих позицій."
     except Exception as e:
         return f"⚠️ Помилка переносу SL в BE: {str(e)}"
 
 def execute_bingx_trade(symbol, action, price, sl, tp1, tp2):  
-    """Автоматична торгівля на ф'ючерсах BingX у Hedge Mode з виставленням SL/TP"""  
     if not exchange:  
-        return "⚠️ BingX API ключі не знайдені в Environment Variables."  
-    
+        return "⚠️ BingX API ключі не знайдені."  
     try:  
         formatted_symbol = get_formatted_symbol(symbol)  
         is_buy = action.upper() == 'BUY'  
@@ -258,14 +239,13 @@ def execute_bingx_trade(symbol, action, price, sl, tp1, tp2):
 
         closed_info = close_opposite_positions(symbol, action)
 
-        # Очищення старих ордерів
         try:
             open_orders = exchange.fetch_open_orders(formatted_symbol)
             for ord in open_orders:
                 if ord.get('info', {}).get('positionSide') == position_side:
                     exchange.cancel_order(ord['id'], formatted_symbol)
-        except Exception as cancel_err:
-            print(f"Очищення старих ордерів: {str(cancel_err)}")
+        except Exception:
+            pass
 
         margin_usdt = float(os.environ.get("TRADE_MARGIN_USDT", 10))  
         leverage = int(os.environ.get("TRADE_LEVERAGE", 10))  
@@ -278,7 +258,6 @@ def execute_bingx_trade(symbol, action, price, sl, tp1, tp2):
         position_size_usdt = margin_usdt * leverage  
         market_info = exchange.market(formatted_symbol)  
         contract_size = float(market_info.get('contractSize', 1.0))  
-
         amount = (position_size_usdt / price) / contract_size  
 
         try:  
@@ -344,7 +323,6 @@ def execute_bingx_trade(symbol, action, price, sl, tp1, tp2):
         return f"❌ **Помилка відкриття угоди на BingX:** {str(e)}"  
 
 def process_signal(data):  
-    # 0. Захист від порожніх та пінг-запитів
     if not data or (float(data.get("price", 0)) == 0 and str(data.get("action", "")).upper() != "MOVE_BE"):
         print("Отримано порожній запит/ping. Ігноруємо.")
         return
@@ -353,14 +331,12 @@ def process_signal(data):
     ticker = data.get("ticker", "XAUUSD")  
     formatted_symbol = get_formatted_symbol(ticker)  
   
-    # А. Сигнал переносу в BE
     if action == "MOVE_BE":
         entry_price = data.get("entry_price")
         be_result = execute_move_be(formatted_symbol, entry_price)
         send_telegram(f"⚡️ **СИГНАЛ BE ДЛЯ {ticker}:**\n{be_result}")
         return
 
-    # Б. Сигнал Входу (BUY / SELL)
     price = float(data.get("price", 0))  
     sl = float(data.get("sl", 0))  
     tp1 = float(data.get("tp1", 0))  
@@ -397,9 +373,7 @@ def process_signal(data):
     except Exception as e:  
         ai_verdict = f"Помилка ШІ: {str(e)}"  
 
-    close_report = ""
     trade_report = ""  
-    
     trading_enabled = is_trading_enabled()
     symbol_enabled = is_symbol_auto_trade_enabled(ticker)
 
@@ -412,7 +386,7 @@ def process_signal(data):
             trade_report = "\n\n⏸ **Автоторгівлю вимкнено в Telegram.** Сигнал проаналізовано, але угоду на BingX не створено."  
 
     msg = (  
-        f"⚡️ **НОВИЙ СИГНАЛ: {ticker} ({action})**{close_report}\n\n"  
+        f"⚡️ **НОВИЙ СИГНАЛ: {ticker} ({action})**\n\n"  
         f"📍 **Вхід:** `{price}`\n"  
         f"🛑 **SL:** `{sl}`\n"  
         f"🎯 **TP1:** `{tp1}`\n"  
@@ -424,6 +398,49 @@ def process_signal(data):
   
     send_telegram(msg, get_main_keyboard())  
 
+# ----------------------------------------------------
+# cTrader OAuth Ендпоінти
+# ----------------------------------------------------
+@app.route('/ctrader/login')
+def ctrader_login():
+    """Генерує посилання для авторизації cTrader"""
+    redirect_uri = "https://trade-ai-webhook.onrender.com/ctrader/callback"
+    auth_url = (
+        f"https://connect.spotware.com/apps/auth"
+        f"?client_id={CTRADER_CLIENT_ID}"
+        f"&redirect_uri={redirect_uri}"
+        f"&scope=trading"
+    )
+    return redirect(auth_url)
+
+@app.route('/ctrader/callback')
+def ctrader_callback():
+    """Отримує code та міняє його на refresh_token"""
+    code = request.args.get('code')
+    if not code:
+        return "Помилка: не отримано авторизаційний код від cTrader.", 400
+
+    redirect_uri = "https://trade-ai-webhook.onrender.com/ctrader/callback"
+    token_url = "https://connect.spotware.com/apps/token"
+    
+    payload = {
+        "grant_type": "authorization_code",
+        "client_id": CTRADER_CLIENT_ID,
+        "client_secret": CTRADER_CLIENT_SECRET,
+        "redirect_uri": redirect_uri,
+        "code": code
+    }
+    
+    res = requests.post(token_url, data=payload)
+    if res.status_code == 200:
+        token_data = res.json()
+        with open(CTRADER_TOKEN_FILE, "w") as f:
+            json.dump(token_data, f)
+        send_telegram("✅ **cTrader успішно авторизовано!** Токен доступу збережено.")
+        return "<h3>Успіх! cTrader авторизовано. Можете закрити цю сторінку.</h3>", 200
+    else:
+        return f"<h3>Помилка авторизації cTrader:</h3><pre>{res.text}</pre>", 400
+
 @app.route('/', methods=['POST', 'GET'])
 @app.route('/webhook', methods=['POST', 'GET'])  
 def webhook():  
@@ -432,7 +449,6 @@ def webhook():
 
     data = request.get_json(silent=True) or {}  
   
-    # 1. Обробка подій з Telegram (кнопки меню та callback inline-кнопки)
     if "callback_query" in data:
         callback = data["callback_query"]
         cb_data = callback.get("data", "")
@@ -444,7 +460,6 @@ def webhook():
                 config[sym_key] = not config[sym_key]
                 save_symbols_config(config)
                 
-            # Оновлюємо inline-меню у повідомленні Telegram
             message_id = callback["message"]["message_id"]
             chat_id = callback["message"]["chat"]["id"]
             
@@ -455,8 +470,6 @@ def webhook():
                 "reply_markup": get_symbols_inline_keyboard()
             }
             requests.post(url, json=payload)
-            
-            # Підтверджуємо нажаття callback
             requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/answerCallbackQuery", json={"callback_query_id": callback["id"]})
         return jsonify({"status": "callback processed"}), 200
 
@@ -464,26 +477,28 @@ def webhook():
         text = data["message"]["text"]  
         if text in ["🟢 Увімкнути торгівлю", "Увімкнути торгівлю"]:  
             set_trading_state(True)  
-            send_telegram("✅ **Автоторгівлю на BingX УВІМКНЕНО!**\nТепер дозволені монети будуть відкриватися на біржі.", get_main_keyboard())  
+            send_telegram("✅ **Автоторгівлю на BingX УВІМКНЕНО!**", get_main_keyboard())  
         elif text in ["🔴 Вимкнути торгівлю", "Вимкнути торгівлю"]:  
             set_trading_state(False)  
-            send_telegram("⏸ **Глобальну автоторгівлю ВИМКНЕНО!**\nБот працюватиме суворо в режимі моніторингу.", get_main_keyboard())  
+            send_telegram("⏸ **Глобальну автоторгівлю ВИМКНЕНО!**", get_main_keyboard())  
         elif text == "⚙️ Налаштування монет":
-            send_telegram("⚙️ **Налаштування режимів для монет:**\nНатискайте на кнопки нижче, щоб увімкнути 🟢 (Автоторгівля) або 🔴 (Тільки сигнал):", get_symbols_inline_keyboard())
+            send_telegram("⚙️ **Налаштування режимів для монет:**", get_symbols_inline_keyboard())
         elif text in ["📊 Стан системи", "/start"]:  
             status_str = "🟢 **АКТИВНА**" if is_trading_enabled() else "🔴 **ВИМКНЕНА (Моніторинг)**"  
             config = load_symbols_config()
             active_syms = [k for k, v in config.items() if v]
             active_str = ", ".join(active_syms) if active_syms else "Жодної"
             
+            has_ctrader = "🟢 Підключено" if os.path.exists(CTRADER_TOKEN_FILE) else "🔴 Не авторизовано"
+            
             msg = (
                 f"⚙️ **Статус автоторгівлі:** {status_str}\n"
-                f"🎯 **Автоторгівля увімкнена для:** `{active_str}`"
+                f"🎯 **Активні монети:** `{active_str}`\n"
+                f"🏛 **FxPro cTrader:** {has_ctrader}"
             )
             send_telegram(msg, get_main_keyboard())  
         return jsonify({"status": "telegram message processed"}), 200  
   
-    # 2. Обробка сигнального вебхука TradingView  
     threading.Thread(target=process_signal, args=(data,)).start()  
     return jsonify({"status": "success"}), 200  
 
