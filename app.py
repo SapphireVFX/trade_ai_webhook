@@ -134,15 +134,13 @@ def get_formatted_symbol(symbol):
     if not exchange:  
         return symbol  
     try:  
-        markets = exchange.load_markets(params={'type': 'swap'})  
         raw = symbol.replace('.P', '').replace('/', '').replace(':', '').strip().upper()  
 
+        # Для золота строго обираємо стандартне GOLD / XAU ф'ючерс на BingX
         if "XAU" in raw or "GOLD" in raw:  
-            for m_symbol, market in markets.items():  
-                if market.get('swap', False) and ("XAU" in m_symbol or "GOLD" in m_symbol):  
-                    return m_symbol  
-            return "XAUT/USDT:USDT"  
+            return "GOLD/USDT:USDT"  
 
+        markets = exchange.load_markets(params={'type': 'swap'})  
         base_currency = raw.replace('USDT', '')  
         for m_symbol, market in markets.items():  
             if market.get('swap', False):  
@@ -154,9 +152,9 @@ def get_formatted_symbol(symbol):
         print(f"Market Lookup Error: {str(e)}")  
         raw_clean = symbol.replace('.P', '').replace('/', '').replace(':', '').strip().upper()  
         if "XAU" in raw_clean or "GOLD" in raw_clean:  
-            return "XAUT/USDT:USDT"  
+            return "GOLD/USDT:USDT"  
         base = raw_clean.replace('USDT', '')  
-        return f"{base}/USDT:USDT"  
+        return f"{base}/USDT:USDT"
 
 def close_opposite_positions(symbol, new_action):  
     if not exchange:  
