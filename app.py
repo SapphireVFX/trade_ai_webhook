@@ -298,11 +298,16 @@ def execute_bingx_trade(symbol, action, price, sl, tp1, tp2):
     except Exception as e:  
         return f"❌ **Помилка відкриття угоди на BingX:** {str(e)}"  
 
-def process_signal(data):  
-    action = str(data.get("action", "BUY")).upper()  
-    ticker = data.get("ticker", "XAUUSD")  
-    formatted_symbol = get_formatted_symbol(ticker)  
-  
+def process_signal(data):
+    # Ігноруємо порожні або пингові запити без ціни та дії
+    if not data or (float(data.get("price", 0)) == 0 and str(data.get("action", "")).upper() != "MOVE_BE"):
+        print("Отримано порожній запит/ping. Ігноруємо.")
+        return
+
+    action = str(data.get("action", "BUY")).upper()
+    ticker = data.get("ticker", "XAUUSD")
+    formatted_symbol = get_formatted_symbol(ticker)
+
     # ----------------------------------------------------
     # А. СПЕЦІАЛЬНИЙ ОБРОБНИК ДЛЯ СИГНАЛУ MOVE_BE
     # ----------------------------------------------------
