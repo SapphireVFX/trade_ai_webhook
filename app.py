@@ -135,97 +135,110 @@ def close_opposite_positions(symbol, new_action):
     except Exception as e:
         return f"\n⚠️ Помилка закриття попередньої позиції: {str(e)}"
 
-def execute_bingx_trade(symbol, action, price, sl, tp1, tp2):
-    """Автоматична торгівля на ф'ючерсах BingX у Hedge Mode з виставленням SL/TP"""
-    if not exchange:
-        return "⚠️️ BingX API ключі не знайдені в Environment Variables."
+def execute_bingx_trade(symbol, action, price, sl, tp1, tp2):  
+    """Автоматична торгівля на ф'ючерсах BingX у Hedge Mode з виставленням SL/TP"""  
+    if not exchange:  
+        return "⚠ BingX API ключі не знайдені в Environment Variables."  
     
-    try:
-        formatted_symbol = get_formatted_symbol(symbol)
-        is_buy = action.upper() == 'BUY'
-        side = 'buy' if is_buy else 'sell'
-        sl_side = 'sell' if is_buy else 'buy'
-        position_side = 'LONG' if is_buy else 'SHORT'
+    try:  
+        formatted_symbol = get_formatted_symbol(symbol)  
+        is_buy = action.upper() == 'BUY'  
+        side = 'buy' if is_buy else 'sell'  
+        sl_side = 'sell' if is_buy else 'buy'  
+        position_side = 'LONG' if is_buy else 'SHORT'  
 
-        margin_usdt = float(os.environ.get("TRADE_MARGIN_USDT", 10))
-        leverage = int(os.environ.get("TRADE_LEVERAGE", 10))
+        # 🚨 1. Спочатку закриваємо протилежні позиції (якщо були) 🚨
+        closed_info = close_opposite_positions(symbol, action)
 
-        # 1. Встановлюємо плече
+        # 🚨 2. Скасовуємо старі залишкові SL/TP ордери для даного напрямку, щоб уникнути накопичення 🚨
         try:
-            exchange.set_leverage(leverage, formatted_symbol)
-        except Exception:
-            pass
+            open_orders = exchange.fetch_open_orders(formatted_symbol)
+            for ord in open_orders:
+                if ord.get('info', {}).get('positionSide') == position_side:
+                    exchange.cancel_order(ord['id'], formatted_symbol)
+        except Exception as cancel_err:
+            print(f"Очищення старих ордерів: {str(cancel_err)}")
 
-        position_size_usdt = margin_usdt * leverage
-        
-        # 2. Розрахунок кількості контрактів та округлення цін
-        market_info = exchange.market(formatted_symbol)
-        contract_size = float(market_info.get('contractSize', 1.0))
-        
-        amount = (position_size_usdt / price) / contract_size
+        margin_usdt = float(os.environ.get("TRADE_MARGIN_USDT", 10))  
+        leverage = int(os.environ.get("TRADE_LEVERAGE", 10))  
 
-        try:
-            amount = float(exchange.amount_to_precision(formatted_symbol, amount))
-            sl_price_formatted = float(exchange.price_to_precision(formatted_symbol, sl))
-            tp1_price_formatted = float(exchange.price_to_precision(formatted_symbol, tp1))
-        except Exception:
-            sl_price_formatted = float(sl)
-            tp1_price_formatted = float(tp1)
+        # 3. Встановлюємо плече  
+        try:  
+            exchange.set_leverage(leverage, formatted_symbol)  
+        except Exception:  
+            pass  
 
-        # 3. Вхід у ринкову позицію
-        order = exchange.create_order(
-            symbol=formatted_symbol,
-            type='market',
-            side=side,
-            amount=amount,
-            params={'positionSide': position_side}
-        )
+        position_size_usdt = margin_usdt * leverage  
 
-        # 4. Виставляємо окремий Stop Loss
-        sl_report = ""
-        try:
-            exchange.create_order(
-                symbol=formatted_symbol,
-                type='STOP_MARKET',
-                side=sl_side,
-                amount=amount,
-                params={
-                    'stopPrice': sl_price_formatted,
-                    'positionSide': position_side
-                }
-            )
-            sl_report = f"🛑 **SL зафіксовано:** `{sl_price_formatted}`\n"
-        except Exception as sl_err:
-            sl_report = f"⚠️ **Помилка виставлення SL:** {str(sl_err)}\n"
+        # 4. Розрахунок кількості контрактів та округлення цін  
+        market_info = exchange.market(formatted_symbol)  
+        contract_size = float(market_info.get('contractSize', 1.0))  
 
-        # 5. Виставляємо окремий Take Profit 1 (33% об'єму)
-        tp_report = ""
-        try:
-            tp1_amount = float(exchange.amount_to_precision(formatted_symbol, amount * 0.33))
-            exchange.create_order(
-                symbol=formatted_symbol,
-                type='TAKE_PROFIT_MARKET',
-                side=sl_side,
-                amount=tp1_amount,
-                params={
-                    'stopPrice': tp1_price_formatted,
-                    'positionSide': position_side
-                }
-            )
-            tp_report = f"🎯 **TP1 зафіксовано (33%):** `{tp1_price_formatted}`\n"
-        except Exception as tp_err:
-            tp_report = f"⚠️ **Помилка виставлення TP1:** {str(tp_err)}\n"
+        amount = (position_size_usdt / price) / contract_size  
 
-        return (
-            f"✅ **Угоду успішно відкрито на BingX Futures!**\n"
-            f"Інструмент: `{formatted_symbol}` ({position_side})\n"
-            f"Об'єм: `${position_size_usdt}` (Маржа: `${margin_usdt}` x{leverage})\n"
-            f"{sl_report}"
-            f"{tp_report}"
-            f"📈 Залишок (67%) утримується за стратегією.\n"
-            f"ID Ордера: `{order['id']}`"
-        )
-    except Exception as e:
+        try:  
+            amount = float(exchange.amount_to_precision(formatted_symbol, amount))  
+            sl_price_formatted = float(exchange.price_to_precision(formatted_symbol, sl))  
+            tp1_price_formatted = float(exchange.price_to_precision(formatted_symbol, tp1))  
+        except Exception:  
+            sl_price_formatted = float(sl)  
+            tp1_price_formatted = float(tp1)  
+
+        # 5. Вхід у ринкову позицію  
+        order = exchange.create_order(  
+            symbol=formatted_symbol,  
+            type='market',  
+            side=side,  
+            amount=amount,  
+            params={'positionSide': position_side}  
+        )  
+
+        # 6. Виставляємо окремий Stop Loss  
+        sl_report = ""  
+        try:  
+            exchange.create_order(  
+                symbol=formatted_symbol,  
+                type='STOP_MARKET',  
+                side=sl_side,  
+                amount=amount,  
+                params={  
+                    'stopPrice': sl_price_formatted,  
+                    'positionSide': position_side  
+                }  
+            )  
+            sl_report = f"🛑 **SL зафіксовано:** `{sl_price_formatted}`\n"  
+        except Exception as sl_err:  
+            sl_report = f"⚠️ **Помилка виставлення SL:** {str(sl_err)}\n"  
+
+        # 7. Виставляємо окремий Take Profit 1 (33% об'єму)  
+        tp_report = ""  
+        try:  
+            tp1_amount = float(exchange.amount_to_precision(formatted_symbol, amount * 0.33))  
+            exchange.create_order(  
+                symbol=formatted_symbol,  
+                type='TAKE_PROFIT_MARKET',  
+                side=sl_side,  
+                amount=tp1_amount,  
+                params={  
+                    'stopPrice': tp1_price_formatted,  
+                    'positionSide': position_side  
+                }  
+            )  
+            tp_report = f"🎯 **TP1 зафіксовано (33%):** `{tp1_price_formatted}`\n"  
+        except Exception as tp_err:  
+            tp_report = f"⚠️ **Помилка виставлення TP1:** {str(tp_err)}\n"  
+
+        return (  
+            f"✅ **Угоду успішно відкрито на BingX Futures!**\n"  
+            f"Інструмент: `{formatted_symbol}` ({position_side})\n"  
+            f"Об'єм: `${position_size_usdt}` (Маржа: `${margin_usdt}` x{leverage})\n"  
+            f"{closed_info}"
+            f"{sl_report}"  
+            f"{tp_report}"  
+            f"📈 Залишок (67%) утримується за стратегією.\n"  
+            f"ID Ордера: `{order['id']}`"  
+        )  
+    except Exception as e:  
         return f"❌ **Помилка відкриття угоди на BingX:** {str(e)}"
 
 def process_signal(data):
