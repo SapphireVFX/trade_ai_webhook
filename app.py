@@ -1,10 +1,20 @@
-import os  
-import json
-import requests  
-import threading  
-import ccxt  
-from flask import Flask, request, jsonify, redirect  
-from openai import OpenAI  
+import os   
+import json  
+import requests   
+import threading   
+import ccxt   
+from datetime import datetime, timezone
+from flask import Flask, request, jsonify, redirect   
+from openai import OpenAI   
+
+def is_weekend_closed():
+    now_utc = datetime.now(timezone.utc)
+    # 5 = Субота, 6 = Неділя (до 23:00 UTC / 00:00 за Києвом)
+    if now_utc.weekday() == 5:
+        return True
+    if now_utc.weekday() == 6 and now_utc.hour < 23:
+        return True
+    return False
 
 app = Flask(__name__)  
 
@@ -327,7 +337,13 @@ def process_signal(data):
 
     action = str(data.get("action", "BUY")).upper()  
     ticker = data.get("ticker", "XAUUSD")  
-    formatted_symbol = get_formatted_symbol(ticker)  
+    formatted_symbol = get_formatted_symbol(ticker) 
+    # --- БЛОКУВАННЯ СИГНАЛІВ ПО ЗОЛОТУ / ФОРЕКСУ НА ВИХІДНІ ---
+    raw_ticker = str(ticker).replace('.P', '').replace('/', '').replace(':', '').strip().upper()
+    if ("XAU" in raw_ticker or "GOLD" in raw_ticker) and is_weekend_closed():
+        print(f"ℹ️️ Сигнал {action} для {ticker} проігноровано (ринок закритий на вихідні).")
+        return
+    # -----------------------------------------------------------
   
     if action == "MOVE_BE":
         # Якщо автоторгівля вимкнена або монету вимкнено — навіть не опитуємо біржу
