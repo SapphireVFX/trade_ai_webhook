@@ -330,9 +330,19 @@ def process_signal(data):
     formatted_symbol = get_formatted_symbol(ticker)  
   
     if action == "MOVE_BE":
+        # Якщо автоторгівля вимкнена або монету вимкнено — навіть не опитуємо біржу
+        if not is_trading_enabled() or not is_symbol_auto_trade_enabled(ticker):
+            print(f"Сигнал BE для {ticker} проігноровано (автоторгівлю для монети вимкнено).")
+            return
+
         entry_price = data.get("entry_price")
         be_result = execute_move_be(formatted_symbol, entry_price)
-        send_telegram(f"⚡️ **СИГНАЛ BE ДЛЯ {ticker}:**\n{be_result}")
+        
+        # Відправляємо повідомлення в Telegram ТІЛЬКИ якщо позиція реально була і SL перенесено
+        if "🛡" in be_result:
+            send_telegram(f"⚡️ **СИГНАЛ BE ДЛЯ {ticker}:**\n{be_result}")
+        else:
+            print(f"Позицію для {ticker} не знайдено, повідомлення про BE приховано.")
         return
 
     price = float(data.get("price", 0))  
