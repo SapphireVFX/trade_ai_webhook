@@ -41,12 +41,12 @@ TRADING_FILE = "trading_state.txt"
 SYMBOLS_FILE = "symbols_config.json"
 CTRADER_TOKEN_FILE = "ctrader_token.json"
 
-DEFAULT_SYMBOLS_CONFIG = {
-    "BTC": True,
-    "XAU": True,
-    "ZEC": False,
-    "NEAR": False,
-    "HYPE": False
+DEFAULT_SYMBOLS_CONFIG = {  
+    "BTC": False,  
+    "XAU": False,  
+    "ZEC": False,  
+    "NEAR": False,  
+    "HYPE": False  
 }
 
 def is_trading_enabled():
@@ -56,7 +56,7 @@ def is_trading_enabled():
                 return f.read().strip() == "True"
         except Exception:
             pass
-    return True
+    return False  # ЗМІНИЛИ З True НА False!
 
 def set_trading_state(state: bool):
     try:
@@ -64,7 +64,7 @@ def set_trading_state(state: bool):
             f.write(str(state))
     except Exception as e:
         print(f"Помилка збереження стану торгівлі: {str(e)}")
-
+        
 def load_symbols_config():
     if os.path.exists(SYMBOLS_FILE):
         try:
@@ -186,7 +186,7 @@ def close_opposite_positions(symbol, new_action):
                     side=close_side, 
                     amount=contracts, 
                     params={
-                        'positionSide': target_position_side  # Видалили 'reduceOnly': True!
+                        'positionSide': target_position_side  # ВИДАЛИЛИ 'reduceOnly': True
                     } 
                 ) 
                 closed_info += f"\n🔄 **Попередню протилежну позицію ({target_position_side}) закрито по ринку!**" 
