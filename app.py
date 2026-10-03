@@ -166,34 +166,33 @@ def get_formatted_symbol(symbol):
         base = raw_clean.replace('USDT', '')  
         return f"{base}/USDT:USDT"
 
-def close_opposite_positions(symbol, new_action):  
-    if not exchange:  
-        return ""  
-    try:  
-        formatted_symbol = get_formatted_symbol(symbol)  
-        positions = exchange.fetch_positions([formatted_symbol])  
+def close_opposite_positions(symbol, new_action): 
+    if not exchange: 
+        return "" 
+    try: 
+        formatted_symbol = get_formatted_symbol(symbol) 
+        positions = exchange.fetch_positions([formatted_symbol]) 
         target_position_side = 'SHORT' if new_action.upper() == 'BUY' else 'LONG'
         close_side = 'buy' if target_position_side == 'SHORT' else 'sell'
-        closed_info = ""  
+        closed_info = "" 
 
-        for pos in positions:  
+        for pos in positions: 
             pos_side = str(pos.get('side', '')).upper()
             contracts = float(pos.get('contracts', 0) or 0)
-            if pos['symbol'] == formatted_symbol and pos_side == target_position_side and contracts > 0:  
-                exchange.create_order(  
-                    symbol=formatted_symbol,  
-                    type='market',  
-                    side=close_side,  
-                    amount=contracts,  
+            if pos['symbol'] == formatted_symbol and pos_side == target_position_side and contracts > 0: 
+                exchange.create_order( 
+                    symbol=formatted_symbol, 
+                    type='market', 
+                    side=close_side, 
+                    amount=contracts, 
                     params={
-                        'positionSide': target_position_side,  
-                        'reduceOnly': True
-                    }  
-                )  
-                closed_info += f"\n🔄 **Попередню протилежну позицію ({target_position_side}) закрито по ринку!**"  
-        return closed_info  
-    except Exception as e:  
-        return f"\n⚠ Помилка закриття попередньої позиції: {str(e)}"  
+                        'positionSide': target_position_side  # Видалили 'reduceOnly': True!
+                    } 
+                ) 
+                closed_info += f"\n🔄 **Попередню протилежну позицію ({target_position_side}) закрито по ринку!**" 
+        return closed_info 
+    except Exception as e: 
+        return f"\n⚠️ Помилка закриття попередньої позиції: {str(e)}"
 
 def execute_move_be(symbol, entry_price):
     if not exchange:
