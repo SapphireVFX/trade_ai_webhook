@@ -43,7 +43,8 @@ CTRADER_TOKEN_FILE = "ctrader_token.json"
 
 DEFAULT_SYMBOLS_CONFIG = {  
     "BTC": False,  
-    "XAU": False,  
+    "XAU": False,
+    "EURUSD": False,
     "ZEC": False,  
     "NEAR": False,  
     "HYPE": False  
@@ -140,30 +141,43 @@ def get_symbols_inline_keyboard():
         inline_keyboard.append([{"text": btn_text, "callback_data": callback_data}])
     return {"inline_keyboard": inline_keyboard}
 
-def get_formatted_symbol(symbol):  
-    if not exchange:  
-        return symbol  
-    try:  
-        raw = symbol.replace('.P', '').replace('/', '').replace(':', '').strip().upper()  
-
+def get_formatted_symbol(symbol):
+    if not exchange:
+        return symbol
+    try:
+        raw = symbol.replace('.P', '').replace('/', '').replace(':', '').strip().upper()
+        
         # Для золота строго обираємо стандартне GOLD / XAU ф'ючерс на BingX
-        if "XAU" in raw or "GOLD" in raw:  
-            return "GOLD/USDT:USDT"  
+        if "XAU" in raw or "GOLD" in raw:
+            return "GOLD/USDT:USDT"
+            
+        # Для нової пари (наприклад, EURUSD)
+        if "EUR" in raw:
+            return "EURUSD/USDT:USDT"
 
-        markets = exchange.load_markets(params={'type': 'swap'})  
-        base_currency = raw.replace('USDT', '')  
-        for m_symbol, market in markets.items():  
-            if market.get('swap', False):  
-                clean_market_symbol = m_symbol.replace('.P', '').replace('/', '').replace(':', '').upper()  
-                if clean_market_symbol == raw or clean_market_symbol.startswith(f"{base_currency}USDT"):  
-                    return m_symbol  
-        return f"{base_currency}/USDT:USDT"  
-    except Exception as e:  
-        print(f"Market Lookup Error: {str(e)}")  
-        raw_clean = symbol.replace('.P', '').replace('/', '').replace(':', '').strip().upper()  
-        if "XAU" in raw_clean or "GOLD" in raw_clean:  
-            return "GOLD/USDT:USDT"  
-        base = raw_clean.replace('USDT', '')  
+        markets = exchange.load_markets(params={'type': 'swap'})
+        base_currency = raw.replace('USDT', '')
+        for m_symbol, market in markets.items():
+            if market.get('swap', False):
+                clean_market_symbol = m_symbol.replace('.P', '').replace('/', '').replace(':', '').upper()
+                if clean_market_symbol == raw or clean_market_symbol.startswith(f"{base_currency}USDT"):
+                    return m_symbol
+                    
+        return f"{base_currency}/USDT:USDT"
+        
+    except Exception as e:
+        print(f"Market Lookup Error: {str(e)}")
+        raw_clean = symbol.replace('.P', '').replace('/', '').replace(':', '').strip().upper()
+        
+        # Для золота в except
+        if "XAU" in raw_clean or "GOLD" in raw_clean:
+            return "GOLD/USDT:USDT"
+            
+        # Для нової пари в except
+        if "EUR" in raw_clean:
+            return "EURUSD/USDT:USDT"
+            
+        base = raw_clean.replace('USDT', '')
         return f"{base}/USDT:USDT"
 
 def close_opposite_positions(symbol, new_action): 
