@@ -391,4 +391,157 @@ def process_signal(data):
   
     prompt = f"""  
 Ти — експертний трейдер із Smart Money Concepts (SMC), FVG та алгоритмічного аналізу.  
-Проаналізуй торговий сигнал для
+Проаналізуй торговий сигнал для {ticker} ({action}):  
+- Робочий таймфрейм: {timeframe}  
+- Ціна входу: {price}  
+- Stop Loss: {sl}  
+- Take Profit 1: {tp1}  
+Надай відповідь ЧІТКО за структурою:  
+1. **ФІНАЛЬНИЙ ВЕРДИКТ:** Напиши **[APPROVED]** або **[REJECTED]** у першому ж рядку та короткий підсумок.  
+2. **Оцінка Risk-to-Reward.**  
+3. **Контекст SMC/FVG.**  
+Не використовуй символи ### для заголовків.  
+"""  
+  
+    try:  
+        response = client.chat.completions.create(  
+            model="gpt-4o-mini",  
+            messages=[{"role": "user", "content": prompt}],  
+            max_tokens=750  
+        )  
+        ai_verdict = response.choices[0].message.content  
+    except Exception as e:  
+        ai_verdict = f"Помилка ШІ: {str(e)}"  
+
+    trade_report = ""  
+    if "[APPROVED]" in ai_verdict:  
+        if is_fx_or_gold:
+            if get_exchange_state(TRADING_CTRADER_FILE):
+                sym_conf = get_ctrader_symbol_config(ticker)
+                if sym_conf["enabled"]:
+                    trade_report = "\n\n" + execute_ctrader_trade(ticker, action, price, sl, tp1, sym_conf["lot"])
+                else:
+                    trade_report = f"\n\n👁 Моніторинг: для `{ticker}` автоторгівлю в cTrader вимкнено."
+            else:
+                trade_report = "\n\n⏸ Автоторгівлю cTrader вимкнено."
+        else:
+            if get_exchange_state(TRADING_BINGX_FILE):
+                if is_bingx_symbol_enabled(ticker):
+                    trade_report = "\n\n" + execute_bingx_trade(ticker, action, price, sl, tp1, tp2)  
+                else:
+                    trade_report = f"\n\n👁 Моніторинг: для `{ticker}` автоторгівлю на BingX вимкнено."
+            else:  
+                trade_report = "\n\n⏸ Автоторгівлю BingX вимкнено."  
+
+    msg = (  
+        f"⚡️ **НОВИЙ СИГНАЛ: {ticker} ({action})**\n\n"  
+        f"📍 **Вхід:** `{price}`\n"  
+        f"🛑 **SL:** `{sl}`\n"  
+        f"🎯 **TP1:** `{tp1}`\n\n"  
+        f"🤖 **Аналіз ШІ:**\n{ai_verdict}{trade_report}"  
+    )  
+    send_telegram(msg, get_main_keyboard())  
+
+# ----------------------------------------------------
+# cTrader OAuth Ендпоінти
+# ----------------------------------------------------
+@app.route('/ctrader/login')
+def ctrader_login():
+    redirect_uri = "https://trade-ai-webhook.onrender.com/ctrader/callback"
+    auth_url = f"https://connect.spotware.com/apps/auth?client_id={CTRADER_CLIENT_ID}&redirect_uri={redirect_uri}&scope=trading"
+    return redirect(auth_url)
+
+@app.route('/ctrader/callback')
+def ctrader_callback():
+    code = request.args.get('code')
+    if not code:
+        return "Помилка: не отримано авторизаційний код від cTrader.", 400
+    redirect_uri = "https://trade-ai-webhook.onrender.com/ctrader/callback"
+    token_url = "https://connect.spotware.com/apps/token"
+    payload = {"grant_type": "authorization_code", "client_id": CTRADER_CLIENT_ID, "client_secret": CTRADER_CLIENT_SECRET, "redirect_uri": redirect_uri, "code": code}
+    res = requests.post(token_url, data=payload)
+    if res.status_code == 200:
+        token_data = res.json()
+        with open(CTRADER_TOKEN_FILE, "w") as f:
+            json.dump(token_data, f)
+        send_telegram("✅ **cTrader успішно авторизовано!** Токен збережено.")
+        return "<h3>Успіх! cTrader авторизовано. Можете закрити цю сторінку.</h3>", 200
+    else:
+        return f"<h3>Помилка авторизації cTrader:</h3><pre>{res.text}</pre>", 400
+
+@app.route('/', methods=['POST', 'GET'])
+@app.route('/webhook', methods=['POST', 'GET'])  
+def webhook():  
+    if request.method == 'GET':
+        return "TradeAI Webhook Server is Live!", 200
+
+    data = request.get_json(silent=True) or {}  
+  
+    if "callback_query" in data:
+        callback = data["callback_query"]
+        cb_data = callback.get("data", "")
+        
+        if cb_data.startswith("bingx_"):
+            sym_key = cb_data.replace("bingx_", "")
+            config = load_config(SYMBOLS_BINGX_FILE, DEFAULT_BINGX_CONFIG)
+            if sym_key in config:
+                config[sym_key] = not config[sym_key]
+                save_config(SYMBOLS_BINGX_FILE, config)
+                
+            message_id = callback["message"]["message_id"]
+            chat_id = callback["message"]["chat"]["id"]
+            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/editMessageReplyMarkup"
+            requests.post(url, json={"chat_id": chat_id, "message_id": message_id, "reply_markup": get_bingX_inline_keyboard()})
+            requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/answerCallbackQuery", json={"callback_query_id": callback["id"]})
+            
+        elif cb_data.startswith("ctrader_toggle_"):
+            sym_key = cb_data.replace("ctrader_toggle_", "")
+            config = load_config(SYMBOLS_CTRADER_FILE, DEFAULT_CTRADER_CONFIG)
+            if sym_key in config:
+                config[sym_key]["enabled"] = not config[sym_key]["enabled"]
+                save_config(SYMBOLS_CTRADER_FILE, config)
+                
+            message_id = callback["message"]["message_id"]
+            chat_id = callback["message"]["chat"]["id"]
+            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/editMessageReplyMarkup"
+            requests.post(url, json={"chat_id": chat_id, "message_id": message_id, "reply_markup": get_ctrader_inline_keyboard()})
+            requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/answerCallbackQuery", json={"callback_query_id": callback["id"]})
+            
+        return jsonify({"status": "callback processed"}), 200
+
+    if "message" in data and "text" in data["message"]:  
+        text = data["message"]["text"]  
+        if text in ["🟢 BingX ON", "BingX ON"]:  
+            set_exchange_state(TRADING_BINGX_FILE, True)  
+            send_telegram("✅ **Автоторгівлю на BingX УВІМКНЕНО!**", get_main_keyboard())  
+        elif text in ["🔴 BingX OFF", "BingX OFF"]:  
+            set_exchange_state(TRADING_BINGX_FILE, False)  
+            send_telegram("⏸ **Автоторгівлю на BingX ВИМКНЕНО!**", get_main_keyboard())  
+        elif text in ["🟢 cTrader ON", "cTrader ON"]:  
+            set_exchange_state(TRADING_CTRADER_FILE, True)  
+            send_telegram("✅ **Автоторгівлю на cTrader УВІМКНЕНО!**", get_main_keyboard())  
+        elif text in ["🔴 cTrader OFF", "cTrader OFF"]:  
+            set_exchange_state(TRADING_CTRADER_FILE, False)  
+            send_telegram("⏸ **Автоторгівлю на cTrader ВИМКНЕНО!**", get_main_keyboard())  
+        elif text == "⚙️ Налаштування BingX":
+            send_telegram("⚙️ **Налаштування монет BingX:**", get_bingX_inline_keyboard())
+        elif text == "⚙️ Налаштування cTrader":
+            send_telegram("⚙️ **Налаштування інструментів та лотів cTrader:**", get_ctrader_inline_keyboard())
+        elif text in ["📊 Стан системи", "/start"]:  
+            bingx_status = "🟢 Активна" if get_exchange_state(TRADING_BINGX_FILE) else "🔴 Вимкнена"
+            ctrader_status = "🟢 Активна" if get_exchange_state(TRADING_CTRADER_FILE) else "🔴 Вимкнена"
+            has_ctrader = "🟢 Підключено" if os.path.exists(CTRADER_TOKEN_FILE) else "🔴 Не авторизовано"
+            
+            msg = (
+                f"⚙️ **Статус BingX:** {bingx_status}\n"
+                f"⚙️ **Статус cTrader (FxPro):** {ctrader_status}\n"
+                f"🏛 **cTrader OAuth:** {has_ctrader}"
+            )
+            send_telegram(msg, get_main_keyboard())  
+        return jsonify({"status": "telegram message processed"}), 200  
+  
+    threading.Thread(target=process_signal, args=(data,)).start()  
+    return jsonify({"status": "success"}), 200  
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
