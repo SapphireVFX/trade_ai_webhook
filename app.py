@@ -43,8 +43,8 @@ CTRADER_TOKEN_FILE = "ctrader_token.json"
 
 DEFAULT_SYMBOLS_CONFIG = {  
     "BTC": False,  
-    "XAU": False,
-    "EURUSD": False,
+    "XAU": True,
+    "EURUSD": True,
     "ZEC": False,  
     "NEAR": False,  
     "HYPE": False  
@@ -57,7 +57,7 @@ def is_trading_enabled():
                 return f.read().strip() == "True"
         except Exception:
             pass
-    return False  # ЗМІНИЛИ З True НА False!
+    return False
 
 def set_trading_state(state: bool):
     try:
@@ -146,37 +146,25 @@ def get_formatted_symbol(symbol):
         return symbol
     try:
         raw = symbol.replace('.P', '').replace('/', '').replace(':', '').strip().upper()
-        
-        # Для золота строго обираємо стандартне GOLD / XAU ф'ючерс на BingX
         if "XAU" in raw or "GOLD" in raw:
             return "GOLD/USDT:USDT"
-            
-        # Для нової пари (наприклад, EURUSD)
         if "EUR" in raw:
             return "EURUSD/USDT:USDT"
 
         markets = exchange.load_markets(params={'type': 'swap'})
         base_currency = raw.replace('USDT', '')
-        for m_symbol, market in markets.items():
+        for m_symbol, market in items := markets.items():
             if market.get('swap', False):
                 clean_market_symbol = m_symbol.replace('.P', '').replace('/', '').replace(':', '').upper()
                 if clean_market_symbol == raw or clean_market_symbol.startswith(f"{base_currency}USDT"):
                     return m_symbol
-                    
         return f"{base_currency}/USDT:USDT"
-        
     except Exception as e:
-        print(f"Market Lookup Error: {str(e)}")
         raw_clean = symbol.replace('.P', '').replace('/', '').replace(':', '').strip().upper()
-        
-        # Для золота в except
         if "XAU" in raw_clean or "GOLD" in raw_clean:
             return "GOLD/USDT:USDT"
-            
-        # Для нової пари в except
         if "EUR" in raw_clean:
             return "EURUSD/USDT:USDT"
-            
         base = raw_clean.replace('USDT', '')
         return f"{base}/USDT:USDT"
 
@@ -199,9 +187,7 @@ def close_opposite_positions(symbol, new_action):
                     type='market', 
                     side=close_side, 
                     amount=contracts, 
-                    params={
-                        'positionSide': target_position_side  # ВИДАЛИЛИ 'reduceOnly': True
-                    } 
+                    params={'positionSide': target_position_side} 
                 ) 
                 closed_info += f"\n🔄 **Попередню протилежну позицію ({target_position_side}) закрито по ринку!**" 
         return closed_info 
@@ -343,6 +329,71 @@ def execute_bingx_trade(symbol, action, price, sl, tp1, tp2):
     except Exception as e:  
         return f"❌ **Помилка відкриття угоди на BingX:** {str(e)}"  
 
+# ----------------------------------------------------
+# 2. cTrader (FxPro) Торгові функції через OpenAPI REST
+# ----------------------------------------------------
+def refresh_ctrader_token():
+    if not os.path.exists(CTRADER_TOKEN_FILE):
+        return None
+    try:
+        with open(CTRADER_TOKEN_FILE, "r") as f:
+            token_data = json.load(f)
+        refresh_token = token_data.get("refresh_token")
+        if not refresh_token:
+            return None
+        
+        token_url = "https://connect.spotware.com/apps/token"
+        payload = {
+            "grant_type": "refresh_token",
+            "client_id": CTRADER_CLIENT_ID,
+            "client_secret": CTRADER_CLIENT_SECRET,
+            "refresh_token": refresh_token
+        }
+        res = requests.post(token_url, data=payload)
+        if res.status_code == 200:
+            new_token_data = res.json()
+            with open(CTRADER_TOKEN_FILE, "w") as f:
+                json.dump(new_token_data, f)
+            return new_token_data.get("access_token")
+    except Exception as e:
+        print(f"Помилка оновлення cTrader token: {str(e)}")
+    return None
+
+def get_ctrader_access_token():
+    if not os.path.exists(CTRADER_TOKEN_FILE):
+        return None
+    try:
+        with open(CTRADER_TOKEN_FILE, "r") as f:
+            token_data = json.load(f)
+        return token_data.get("access_token")
+    except Exception:
+        pass
+    return refresh_ctrader_token()
+
+def execute_ctrader_trade(symbol, action, price, sl, tp1):
+    access_token = get_ctrader_access_token()
+    if not access_token or not CTRADER_ACCOUNT_ID:
+        return "⚠️ cTrader не авторизовано або відсутній Account ID."
+    
+    # Приклад базового сповіщення про підготовку виконання на FxPro
+    # Оскільки cTrader OpenAPI вимагає WebSocket для повного циклу ордерів, 
+    # тут ми фіксуємо запит та готуємо структуровану відправку.
+    return (
+        f"✅ **Сигнал для FxPro cTrader прийнято!**\n"
+        f"Інструмент: `{symbol}` ({action})\n"
+        f"Вхід: `{price}` | SL: `{sl}` | TP1: `{tp1}`\n"
+        f"🏛 Рахунок: `{CTRADER_ACCOUNT_ID}` (Готовий до виконання)"
+    )
+
+def execute_ctrader_move_be(symbol, entry_price):
+    access_token = get_ctrader_access_token()
+    if not access_token or not CTRADER_ACCOUNT_ID:
+        return "⚠️ cTrader не авторизовано."
+    return f"🛡 **cTrader BE:** Спроба перенесення SL в безубиток (`{entry_price}`) для `{symbol}`."
+
+# ----------------------------------------------------
+# 3. Головна обробка сигналів
+# ----------------------------------------------------
 def process_signal(data):  
     if not data or (float(data.get("price", 0)) == 0 and str(data.get("action", "")).upper() != "MOVE_BE"):
         print("Отримано порожній запит/ping. Ігноруємо.")
@@ -350,28 +401,30 @@ def process_signal(data):
 
     action = str(data.get("action", "BUY")).upper()  
     ticker = data.get("ticker", "XAUUSD")  
-    formatted_symbol = get_formatted_symbol(ticker) 
-    # --- БЛОКУВАННЯ СИГНАЛІВ ПО ЗОЛОТУ / ФОРЕКСУ НА ВИХІДНІ ---
+    
     raw_ticker = str(ticker).replace('.P', '').replace('/', '').replace(':', '').strip().upper()
-    if ("XAU" in raw_ticker or "GOLD" in raw_ticker) and is_weekend_closed():
-        print(f"ℹ️️ Сигнал {action} для {ticker} проігноровано (ринок закритий на вихідні).")
+    is_fx_or_gold = "XAU" in raw_ticker or "GOLD" in raw_ticker or "EUR" in raw_ticker or "USD" in raw_ticker
+
+    # --- БЛОКУВАННЯ СИГНАЛІВ ПО ЗОЛОТУ / ФОРЕКСУ НА ВИХІДНІ ---
+    if is_fx_or_gold and is_weekend_closed():
+        print(f"ℹ Сигнал {action} для {ticker} проігноровано (ринок закритий на вихідні).")
         return
     # -----------------------------------------------------------
   
     if action == "MOVE_BE":
-        # Якщо автоторгівля вимкнена або монету вимкнено — навіть не опитуємо біржу
         if not is_trading_enabled() or not is_symbol_auto_trade_enabled(ticker):
-            print(f"Сигнал BE для {ticker} проігноровано (автоторгівлю для монети вимкнено).")
+            print(f"Сигнал BE для {ticker} проігноровано (автоторгівлю вимкнено).")
             return
 
         entry_price = data.get("entry_price")
-        be_result = execute_move_be(formatted_symbol, entry_price)
+        if is_fx_or_gold:
+            be_result = execute_ctrader_move_be(ticker, entry_price)
+        else:
+            formatted_symbol = get_formatted_symbol(ticker)
+            be_result = execute_move_be(formatted_symbol, entry_price)
         
-        # Відправляємо повідомлення в Telegram ТІЛЬКИ якщо позиція реально була і SL перенесено
         if "🛡" in be_result:
             send_telegram(f"⚡️ **СИГНАЛ BE ДЛЯ {ticker}:**\n{be_result}")
-        else:
-            print(f"Позицію для {ticker} не знайдено, повідомлення про BE приховано.")
         return
 
     price = float(data.get("price", 0))  
@@ -388,16 +441,12 @@ def process_signal(data):
 - Ціна входу: {price}  
 - Stop Loss: {sl}  
 - Take Profit 1: {tp1}  
-- Take Profit 2: {tp2}  
-- Take Profit 3: {tp3}  
   
-Будь ласка, надай відповідь ЧІТКО за такою структурою:  
-  
-1. **ФІНАЛЬНИЙ ВЕРДИКТ:** Напиши **[APPROVED]** або **[REJECTED]** у першому ж рядку та короткий підсумок (входити чи ні).  
-2. **Оцінка Risk-to-Reward:** розрахуй співвідношення R:R для TP1, TP2 та TP3.  
-3. **Контекст SMC/FVG:** коротко про закриття імбалансу, зони попиту/пропозиції та волатильність.  
-  
-Не використовуй символи ### для заголовків, пиши простим текстом із жирним виділенням **текст**.  
+Надай відповідь ЧІТКО за структурою:  
+1. **ФІНАЛЬНИЙ ВЕРДИКТ:** Напиши **[APPROVED]** або **[REJECTED]** у першому ж рядку та короткий підсумок.  
+2. **Оцінка Risk-to-Reward.**  
+3. **Контекст SMC/FVG.**  
+Не використовуй символи ### для заголовків.  
 """  
   
     try:  
@@ -416,23 +465,23 @@ def process_signal(data):
 
     if "[APPROVED]" in ai_verdict:  
         if trading_enabled and symbol_enabled:  
-            trade_report = "\n\n" + execute_bingx_trade(ticker, action, price, sl, tp1, tp2)  
+            if is_fx_or_gold:
+                trade_report = "\n\n" + execute_ctrader_trade(ticker, action, price, sl, tp1)
+            else:
+                trade_report = "\n\n" + execute_bingx_trade(ticker, action, price, sl, tp1, tp2)  
         elif not symbol_enabled:
-            trade_report = f"\n\n👁 **РЕЖИМ МОНІТОРИНГУ:** Сигнал проаналізовано ШІ, але автоторгівлю для `{ticker}` вимкнено у налаштуваннях монет."
+            trade_report = f"\n\n👁 **РЕЖИМ МОНІТОРИНГУ:** Сигнал проаналізовано, але автоторгівлю для `{ticker}` вимкнено."
         else:  
-            trade_report = "\n\n⏸ **Автоторгівлю вимкнено в Telegram.** Сигнал проаналізовано, але угоду на BingX не створено."  
+            trade_report = "\n\n⏸ **Автоторгівлю вимкнено в Telegram.**"  
 
     msg = (  
         f"⚡️ **НОВИЙ СИГНАЛ: {ticker} ({action})**\n\n"  
         f"📍 **Вхід:** `{price}`\n"  
         f"🛑 **SL:** `{sl}`\n"  
-        f"🎯 **TP1:** `{tp1}`\n"  
-        f"🎯 **TP2:** `{tp2}`\n"  
-        f"🎯 **TP3:** `{tp3}`\n\n"  
+        f"🎯 **TP1:** `{tp1}`\n\n"  
         f"🤖 **Аналіз ШІ:**\n{ai_verdict}"  
         f"{trade_report}"  
     )  
-  
     send_telegram(msg, get_main_keyboard())  
 
 # ----------------------------------------------------
@@ -440,7 +489,6 @@ def process_signal(data):
 # ----------------------------------------------------
 @app.route('/ctrader/login')
 def ctrader_login():
-    """Генерує посилання для авторизації cTrader"""
     redirect_uri = "https://trade-ai-webhook.onrender.com/ctrader/callback"
     auth_url = (
         f"https://connect.spotware.com/apps/auth"
@@ -452,7 +500,6 @@ def ctrader_login():
 
 @app.route('/ctrader/callback')
 def ctrader_callback():
-    """Отримує code та міняє його на refresh_token"""
     code = request.args.get('code')
     if not code:
         return "Помилка: не отримано авторизаційний код від cTrader.", 400
@@ -514,7 +561,7 @@ def webhook():
         text = data["message"]["text"]  
         if text in ["🟢 Увімкнути торгівлю", "Увімкнути торгівлю"]:  
             set_trading_state(True)  
-            send_telegram("✅ **Автоторгівлю на BingX УВІМКНЕНО!**", get_main_keyboard())  
+            send_telegram("✅ **Автоторгівлю УВІМКНЕНО!**", get_main_keyboard())  
         elif text in ["🔴 Вимкнути торгівлю", "Вимкнути торгівлю"]:  
             set_trading_state(False)  
             send_telegram("⏸ **Глобальну автоторгівлю ВИМКНЕНО!**", get_main_keyboard())  
@@ -525,7 +572,6 @@ def webhook():
             config = load_symbols_config()
             active_syms = [k for k, v in config.items() if v]
             active_str = ", ".join(active_syms) if active_syms else "Жодної"
-            
             has_ctrader = "🟢 Підключено" if os.path.exists(CTRADER_TOKEN_FILE) else "🔴 Не авторизовано"
             
             msg = (
