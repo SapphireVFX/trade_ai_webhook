@@ -456,16 +456,36 @@ def ctrader_callback():
     code = request.args.get('code')
     if not code:
         return "Помилка: не отримано авторизаційний код від cTrader.", 400
+
     redirect_uri = "https://trade-ai-webhook.onrender.com/ctrader/callback"
     token_url = "https://connect.spotware.com/apps/token"
-    payload = {"grant_type": "authorization_code", "client_id": CTRADER_CLIENT_ID, "client_secret": CTRADER_CLIENT_SECRET, "redirect_uri": redirect_uri, "code": code}
+    
+    payload = {
+        "grant_type": "authorization_code",
+        "client_id": CTRADER_CLIENT_ID,
+        "client_secret": CTRADER_CLIENT_SECRET,
+        "redirect_uri": redirect_uri,
+        "code": code
+    }
+    
     res = requests.post(token_url, data=payload)
     if res.status_code == 200:
         token_data = res.json()
+        refresh_token = token_data.get("refresh_token")
+        
+        # Зберігаємо локально
         with open(CTRADER_TOKEN_FILE, "w") as f:
             json.dump(token_data, f)
-        send_telegram("✅ **cTrader успішно авторизовано!** Токен збережено.")
-        return "<h3>Успіх! cTrader авторизовано. Можете закрити цю сторінку.</h3>", 200
+            
+        send_telegram(f"✅ **cTrader успішно авторизовано!**\nВаш Refresh Token:\n`{refresh_token}`")
+        
+        # Виводимо його прямо на сторінку в браузері, щоб ви могли легко скопіювати
+        return f"""
+            <h3>Успіх! cTrader авторизовано.</h3>
+            <p>Ваш <b>Refresh Token</b> (скопіюйте його для додавання у змінні Render як <code>CTRADER_REFRESH_TOKEN</code>):</p>
+            <textarea rows="4" cols="80" style="font-family:monospace;">{refresh_token}</textarea>
+            <p>Можете закрити цю сторінку.</p>
+        """, 200
     else:
         return f"<h3>Помилка авторизації cTrader:</h3><pre>{res.text}</pre>", 400
 
