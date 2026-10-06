@@ -356,7 +356,7 @@ def process_signal(data):
     action = str(data.get("action", "BUY")).upper()  
     ticker = data.get("ticker", "XAUUSD")  
     raw_ticker = str(ticker).replace('.P', '').replace('/', '').replace(':', '').strip().upper()
-    is_fx_or_gold = "XAU" in raw_ticker or "GOLD" in raw_ticker or "EUR" in raw_ticker or "USD" in raw_ticker
+    is_fx_or_gold = "XAU" in raw_ticker or "GOLD" in raw_ticker or raw_ticker in ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "NZDUSD", "USDCHF"]
 
     if is_fx_or_gold and is_weekend_closed():
         print(f"ℹ Сигнал {action} для {ticker} проігноровано (ринок закритий на вихідні).")
