@@ -30,6 +30,7 @@ BINGX_SECRET_KEY = os.environ.get("BINGX_SECRET_KEY")
 CTRADER_CLIENT_ID = os.environ.get("CTRADER_CLIENT_ID")
 CTRADER_CLIENT_SECRET = os.environ.get("CTRADER_CLIENT_SECRET")
 CTRADER_ACCOUNT_ID = os.environ.get("CTRADER_ACCOUNT_ID")
+CTRADER_REFRESH_TOKEN_ENV = os.environ.get("CTRADER_REFRESH_TOKEN")
 
 client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None  
 
@@ -113,7 +114,6 @@ def get_main_keyboard():
     bingx_on = get_exchange_state(TRADING_BINGX_FILE)
     ctrader_on = get_exchange_state(TRADING_CTRADER_FILE)
     
-    # Кнопки тепер відображають поточний статус: якщо увімкнено, пропонують вимкнути, і навпаки
     bingx_btn_text = "🟢 BingX ON" if bingx_on else "🔴 BingX OFF"
     ctrader_btn_text = "🟢 cTrader ON" if ctrader_on else "🔴 cTrader OFF"
     
@@ -125,6 +125,7 @@ def get_main_keyboard():
         ],  
         "resize_keyboard": True  
     }
+
 def get_bingX_inline_keyboard():
     config = load_config(SYMBOLS_BINGX_FILE, DEFAULT_BINGX_CONFIG)
     inline_keyboard = []
@@ -200,7 +201,7 @@ def close_opposite_positions(symbol, new_action):
                 closed_info += f"\n🔄 **Попередню протилежну позицію ({target_position_side}) закрито по ринку!**" 
         return closed_info 
     except Exception as e: 
-        return f"\n⚠️️ Помилка закриття попередньої позиції: {str(e)}"
+        return f"\n⚠ Помилка закриття попередньої позиції: {str(e)}"
 
 def execute_move_be(symbol, entry_price):
     if not exchange:
@@ -227,7 +228,7 @@ def execute_move_be(symbol, entry_price):
                 be_reports.append(f"🛡 **Stop Loss перенесено в BE (`{sl_price_formatted}`) для {formatted_symbol} ({pos_side})**")
         return "\n".join(be_reports) if be_reports else f"ℹ️ Для {formatted_symbol} не знайдено відкритих позицій."
     except Exception as e:
-        return f"⚠️️ Помилка переносу SL в BE: {str(e)}"
+        return f"⚠ Помилка переносу SL в BE: {str(e)}"
 
 def execute_bingx_trade(symbol, action, price, sl, tp1, tp2):  
     if not exchange:  
@@ -295,19 +296,29 @@ def execute_bingx_trade(symbol, action, price, sl, tp1, tp2):
         return f"❌ **Помилка відкриття угоди на BingX:** {str(e)}"  
 
 # ----------------------------------------------------
-# 2. cTrader (FxPro) Торгові функції
+# 2. cTrader (FxPro) Торгові функції та токени
 # ----------------------------------------------------
 def refresh_ctrader_token():
-    if not os.path.exists(CTRADER_TOKEN_FILE):
+    refresh_token = CTRADER_REFRESH_TOKEN_ENV
+    if not refresh_token and os.path.exists(CTRADER_TOKEN_FILE):
+        try:
+            with open(CTRADER_TOKEN_FILE, "r") as f:
+                token_data = json.load(f)
+            refresh_token = token_data.get("refresh_token")
+        except Exception:
+            pass
+            
+    if not refresh_token:
         return None
+        
     try:
-        with open(CTRADER_TOKEN_FILE, "r") as f:
-            token_data = json.load(f)
-        refresh_token = token_data.get("refresh_token")
-        if not refresh_token:
-            return None
         token_url = "https://connect.spotware.com/apps/token"
-        payload = {"grant_type": "refresh_token", "client_id": CTRADER_CLIENT_ID, "client_secret": CTRADER_CLIENT_SECRET, "refresh_token": refresh_token}
+        payload = {
+            "grant_type": "refresh_token",
+            "client_id": CTRADER_CLIENT_ID,
+            "client_secret": CTRADER_CLIENT_SECRET,
+            "refresh_token": refresh_token
+        }
         res = requests.post(token_url, data=payload)
         if res.status_code == 200:
             new_token_data = res.json()
@@ -319,14 +330,14 @@ def refresh_ctrader_token():
     return None
 
 def get_ctrader_access_token():
-    if not os.path.exists(CTRADER_TOKEN_FILE):
-        return None
-    try:
-        with open(CTRADER_TOKEN_FILE, "r") as f:
-            token_data = json.load(f)
-        return token_data.get("access_token")
-    except Exception:
-        pass
+    if os.path.exists(CTRADER_TOKEN_FILE):
+        try:
+            with open(CTRADER_TOKEN_FILE, "r") as f:
+                token_data = json.load(f)
+            if "access_token" in token_data:
+                return token_data.get("access_token")
+        except Exception:
+            pass
     return refresh_ctrader_token()
 
 def execute_ctrader_trade(symbol, action, price, sl, tp1, lot_size):
@@ -334,7 +345,6 @@ def execute_ctrader_trade(symbol, action, price, sl, tp1, lot_size):
     if not access_token or not CTRADER_ACCOUNT_ID:
         return "⚠️ cTrader не авторизовано або відсутній Account ID."
     
-    # Інформаційне повідомлення про успішний запуск торгівлі з лотом 0.01 (або індивідуальним)
     return (
         f"✅ **Угоду відкрито на FxPro cTrader!**\n"
         f"Інструмент: `{symbol}` ({action})\n"
@@ -477,13 +487,11 @@ def ctrader_callback():
         token_data = res.json()
         refresh_token = token_data.get("refresh_token")
         
-        # Зберігаємо локально
         with open(CTRADER_TOKEN_FILE, "w") as f:
             json.dump(token_data, f)
             
         send_telegram(f"✅ **cTrader успішно авторизовано!**\nВаш Refresh Token:\n`{refresh_token}`")
         
-        # Виводимо його прямо на сторінку в браузері, щоб ви могли легко скопіювати
         return f"""
             <h3>Успіх! cTrader авторизовано.</h3>
             <p>Ваш <b>Refresh Token</b> (скопіюйте його для додавання у змінні Render як <code>CTRADER_REFRESH_TOKEN</code>):</p>
@@ -533,10 +541,9 @@ def webhook():
             
         return jsonify({"status": "callback processed"}), 200
 
-if "message" in data and "text" in data["message"]:  
+    if "message" in data and "text" in data["message"]:  
         text = data["message"]["text"]  
         
-        # Керування BingX (реагує лише якщо це не кнопка налаштувань)
         if "BingX" in text and "Налаштування" not in text:
             current_state = get_exchange_state(TRADING_BINGX_FILE)
             new_state = not current_state
@@ -544,7 +551,6 @@ if "message" in data and "text" in data["message"]:
             status_msg = "✅ **Автоторгівлю на BingX УВІМКНЕНО!**" if new_state else "⏸ **Автоторгівлю на BingX ВИМКНЕНО!**"
             send_telegram(status_msg, get_main_keyboard())
             
-        # Керування cTrader (реагує лише якщо це не кнопка налаштувань)
         elif "cTrader" in text and "Налаштування" not in text:
             current_state = get_exchange_state(TRADING_CTRADER_FILE)
             new_state = not current_state
@@ -568,7 +574,7 @@ if "message" in data and "text" in data["message"]:
             )
             send_telegram(msg, get_main_keyboard())  
         return jsonify({"status": "telegram message processed"}), 200
-        
+
     threading.Thread(target=process_signal, args=(data,)).start()  
     return jsonify({"status": "success"}), 200  
 
