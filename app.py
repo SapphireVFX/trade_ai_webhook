@@ -533,18 +533,18 @@ def webhook():
             
         return jsonify({"status": "callback processed"}), 200
 
-    if "message" in data and "text" in data["message"]:  
+if "message" in data and "text" in data["message"]:  
         text = data["message"]["text"]  
         
-        # Керування BingX (реагує на будь-який стан кнопки)
-        if "BingX" in text:
+        # Керування BingX (реагує лише якщо це не кнопка налаштувань)
+        if "BingX" in text and "Налаштування" not in text:
             current_state = get_exchange_state(TRADING_BINGX_FILE)
             new_state = not current_state
             set_exchange_state(TRADING_BINGX_FILE, new_state)
             status_msg = "✅ **Автоторгівлю на BingX УВІМКНЕНО!**" if new_state else "⏸ **Автоторгівлю на BingX ВИМКНЕНО!**"
             send_telegram(status_msg, get_main_keyboard())
             
-        # Керування cTrader (реагує на будь-який стан кнопки)
+        # Керування cTrader (реагує лише якщо це не кнопка налаштувань)
         elif "cTrader" in text and "Налаштування" not in text:
             current_state = get_exchange_state(TRADING_CTRADER_FILE)
             new_state = not current_state
@@ -568,6 +568,7 @@ def webhook():
             )
             send_telegram(msg, get_main_keyboard())  
         return jsonify({"status": "telegram message processed"}), 200
+        
     threading.Thread(target=process_signal, args=(data,)).start()  
     return jsonify({"status": "success"}), 200  
 
