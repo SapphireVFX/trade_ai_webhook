@@ -363,8 +363,10 @@ def execute_ctrader_move_be(symbol, entry_price):
 # 3. Головна обробка сигналів
 # ----------------------------------------------------
 def process_signal(data):  
+    print(f"Отримано дані від TradingView: {data}") # ДЕБАГ: виводимо весь JSON у логи
+    
     if not data or (float(data.get("price", 0)) == 0 and str(data.get("action", "")).upper() != "MOVE_BE"):
-        print("Отримано порожній запит/ping. Ігноруємо.")
+        print(f"Порожній запит або ціна 0. Дані: {data}")
         return
 
     action = str(data.get("action", "BUY")).upper()  
