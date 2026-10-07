@@ -3,3 +3,4 @@ requests
 openai
 gunicorn
 ccxt
+websocket-client
