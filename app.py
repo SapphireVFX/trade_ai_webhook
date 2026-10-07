@@ -112,15 +112,19 @@ def send_telegram(message, reply_markup=None):
 def get_main_keyboard():  
     bingx_on = get_exchange_state(TRADING_BINGX_FILE)
     ctrader_on = get_exchange_state(TRADING_CTRADER_FILE)
+    
+    # Кнопки тепер відображають поточний статус: якщо увімкнено, пропонують вимкнути, і навпаки
+    bingx_btn_text = "🟢 BingX ON" if bingx_on else "🔴 BingX OFF"
+    ctrader_btn_text = "🟢 cTrader ON" if ctrader_on else "🔴 cTrader OFF"
+    
     return {  
         "keyboard": [  
-            [{"text": "🟢 BingX ON" if not bingx_on else "🔴 BingX OFF"}, {"text": "🟢 cTrader ON" if not ctrader_on else "🔴 cTrader OFF"}],  
+            [{"text": bingx_btn_text}, {"text": ctrader_btn_text}],  
             [{"text": "⚙️ Налаштування BingX"}, {"text": "⚙️ Налаштування cTrader"}],
             [{"text": "📊 Стан системи"}]  
         ],  
         "resize_keyboard": True  
-    }  
-
+    }
 def get_bingX_inline_keyboard():
     config = load_config(SYMBOLS_BINGX_FILE, DEFAULT_BINGX_CONFIG)
     inline_keyboard = []
@@ -531,18 +535,23 @@ def webhook():
 
     if "message" in data and "text" in data["message"]:  
         text = data["message"]["text"]  
-        if text in ["🟢 BingX ON", "BingX ON"]:  
-            set_exchange_state(TRADING_BINGX_FILE, True)  
-            send_telegram("✅ **Автоторгівлю на BingX УВІМКНЕНО!**", get_main_keyboard())  
-        elif text in ["🔴 BingX OFF", "BingX OFF"]:  
-            set_exchange_state(TRADING_BINGX_FILE, False)  
-            send_telegram("⏸ **Автоторгівлю на BingX ВИМКНЕНО!**", get_main_keyboard())  
-        elif text in ["🟢 cTrader ON", "cTrader ON"]:  
-            set_exchange_state(TRADING_CTRADER_FILE, True)  
-            send_telegram("✅ **Автоторгівлю на cTrader УВІМКНЕНО!**", get_main_keyboard())  
-        elif text in ["🔴 cTrader OFF", "cTrader OFF"]:  
-            set_exchange_state(TRADING_CTRADER_FILE, False)  
-            send_telegram("⏸ **Автоторгівлю на cTrader ВИМКНЕНО!**", get_main_keyboard())  
+        
+        # Керування BingX (реагує на будь-який стан кнопки)
+        if "BingX" in text:
+            current_state = get_exchange_state(TRADING_BINGX_FILE)
+            new_state = not current_state
+            set_exchange_state(TRADING_BINGX_FILE, new_state)
+            status_msg = "✅ **Автоторгівлю на BingX УВІМКНЕНО!**" if new_state else "⏸ **Автоторгівлю на BingX ВИМКНЕНО!**"
+            send_telegram(status_msg, get_main_keyboard())
+            
+        # Керування cTrader (реагує на будь-який стан кнопки)
+        elif "cTrader" in text and "Налаштування" not in text:
+            current_state = get_exchange_state(TRADING_CTRADER_FILE)
+            new_state = not current_state
+            set_exchange_state(TRADING_CTRADER_FILE, new_state)
+            status_msg = "✅ **Автоторгівлю на cTrader УВІМКНЕНО!**" if new_state else "⏸ **Автоторгівлю на cTrader ВИМКНЕНО!**"
+            send_telegram(status_msg, get_main_keyboard())
+            
         elif text == "⚙️ Налаштування BingX":
             send_telegram("⚙️ **Налаштування монет BingX:**", get_bingX_inline_keyboard())
         elif text == "⚙️ Налаштування cTrader":
@@ -550,7 +559,7 @@ def webhook():
         elif text in ["📊 Стан системи", "/start"]:  
             bingx_status = "🟢 Активна" if get_exchange_state(TRADING_BINGX_FILE) else "🔴 Вимкнена"
             ctrader_status = "🟢 Активна" if get_exchange_state(TRADING_CTRADER_FILE) else "🔴 Вимкнена"
-            has_ctrader = "🟢 Підключено" if os.path.exists(CTRADER_TOKEN_FILE) else "🔴 Не авторизовано"
+            has_ctrader = "🟢 Підключено" if os.path.exists(CTRADER_TOKEN_FILE) or os.environ.get("CTRADER_REFRESH_TOKEN") else "🔴 Не авторизовано"
             
             msg = (
                 f"⚙️ **Статус BingX:** {bingx_status}\n"
@@ -558,8 +567,7 @@ def webhook():
                 f"🏛 **cTrader OAuth:** {has_ctrader}"
             )
             send_telegram(msg, get_main_keyboard())  
-        return jsonify({"status": "telegram message processed"}), 200  
-  
+        return jsonify({"status": "telegram message processed"}), 200
     threading.Thread(target=process_signal, args=(data,)).start()  
     return jsonify({"status": "success"}), 200  
 
