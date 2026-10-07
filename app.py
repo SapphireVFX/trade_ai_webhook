@@ -315,15 +315,19 @@ CTRADER_API_URL = "https://api.spotware.com" # Базовий шлюз OpenAPI (
 
 def refresh_ctrader_token():
     refresh_token = CTRADER_REFRESH_TOKEN_ENV
+    print(f"ДЕБАГ: CTRADER_REFRESH_TOKEN з env наявний: {bool(refresh_token)}")
     if not refresh_token and os.path.exists(CTRADER_TOKEN_FILE):
         try:
             with open(CTRADER_TOKEN_FILE, "r") as f:
                 token_data = json.load(f)
             refresh_token = token_data.get("refresh_token")
-        except Exception:
+            print("ДЕБАГ: Знайдено refresh_token у локальному файлі token.json")
+        except Exception as e:
+            print(f"ДЕБАГ: Помилка читання файлу токена: {e}")
             pass
             
     if not refresh_token:
+        print("ДЕБАГ: Refresh token взагалі відсутній!")
         return None
         
     try:
@@ -335,6 +339,7 @@ def refresh_ctrader_token():
             "refresh_token": refresh_token
         }
         res = requests.post(token_url, data=payload)
+        print(f"ДЕБАГ: Відповідь від Spotware token API: статус {res.status_code}, текст: {res.text}")
         if res.status_code == 200:
             new_token_data = res.json()
             with open(CTRADER_TOKEN_FILE, "w") as f:
@@ -345,6 +350,7 @@ def refresh_ctrader_token():
     return None
 
 def get_ctrader_access_token():
+    print(f"ДЕБАГ: Перевірка CTRADER_ACCOUNT_ID: {CTRADER_ACCOUNT_ID}")
     if os.path.exists(CTRADER_TOKEN_FILE):
         try:
             with open(CTRADER_TOKEN_FILE, "r") as f:
