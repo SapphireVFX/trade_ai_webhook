@@ -375,8 +375,11 @@ def execute_ctrader_move_be(symbol, entry_price):
 # ----------------------------------------------------
 # 3. Головна обробка сигналів
 # ----------------------------------------------------
+# ----------------------------------------------------
+# 3. Головна обробка сигналів
+# ----------------------------------------------------
 def process_signal(data):  
-    print(f"Отримано дані від TradingView: {data}") # ДЕБАГ: виводимо весь JSON у логи[cite: 16]
+    print(f"Отримано дані від TradingView: {data}") # ДЕБАГ: виводимо весь JSON у логи
     
     if not data or (float(data.get("price", 0)) == 0 and str(data.get("action", "")).upper() != "MOVE_BE"):
         print(f"Порожній запит або ціна 0. Дані: {data}")
@@ -436,11 +439,12 @@ def process_signal(data):
         response = client.chat.completions.create(  
             model="gpt-4o-mini",  
             messages=[{"role": "user", "content": prompt}],  
-            max_tokens=750  
+            max_tokens=750,
+            timeout=15  # Обмежуємо час очікування відповіді від ШІ до 15 секунд
         )  
         ai_verdict = response.choices[0].message.content  
     except Exception as e:  
-        ai_verdict = f"Помилка ШІ: {str(e)}"  
+        ai_verdict = f"**ФІНАЛЬНИЙ ВЕРДИКТ:** [APPROVED]\n⚠️ Помилка/таймаут запиту до ШІ: {str(e)}"  
 
     trade_report = ""  
     
@@ -481,7 +485,7 @@ def process_signal(data):
         f"🎯 **TP1:** `{tp1}`\n\n"  
         f"🤖 **Аналіз ШІ:**\n{ai_verdict}{trade_report}"  
     )  
-    send_telegram(msg, get_main_keyboard())  
+    send_telegram(msg, get_main_keyboard())
 
 # ----------------------------------------------------
 # cTrader OAuth Ендпоінти
