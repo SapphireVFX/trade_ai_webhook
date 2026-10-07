@@ -39,6 +39,9 @@ client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 # ----------------------------------------------------
 TRADING_BINGX_FILE = "trading_bingx.txt"
 TRADING_CTRADER_FILE = "trading_ctrader.txt"
+AI_FILTER_BINGX_FILE = "ai_filter_bingx.txt"
+AI_FILTER_CTRADER_FILE = "ai_filter_ctrader.txt"
+
 SYMBOLS_BINGX_FILE = "symbols_bingx.json"
 SYMBOLS_CTRADER_FILE = "symbols_ctrader.json"
 CTRADER_TOKEN_FILE = "ctrader_token.json"
@@ -55,14 +58,14 @@ DEFAULT_CTRADER_CONFIG = {
     "EURUSD": {"enabled": False, "lot": 0.01}
 }
 
-def get_exchange_state(filepath):
+def get_exchange_state(filepath, default=False):
     if os.path.exists(filepath):
         try:
             with open(filepath, "r") as f:
                 return f.read().strip() == "True"
         except Exception:
             pass
-    return False
+    return default
 
 def set_exchange_state(filepath, state: bool):
     try:
@@ -128,7 +131,12 @@ def get_main_keyboard():
 
 def get_bingX_inline_keyboard():
     config = load_config(SYMBOLS_BINGX_FILE, DEFAULT_BINGX_CONFIG)
+    ai_filter = get_exchange_state(AI_FILTER_BINGX_FILE, default=True)
+    
     inline_keyboard = []
+    filter_icon = "🟢" if ai_filter else "🔴"
+    inline_keyboard.append([{"text": f"{filter_icon} Фільтрація ШІ (Вердикт)", "callback_data": "toggle_ai_bingx"}])
+    
     for sym_key, enabled in config.items():
         status_icon = "🟢" if enabled else "🔴"
         action_text = "Автоторгівля" if enabled else "Тільки сигнал"
@@ -138,7 +146,12 @@ def get_bingX_inline_keyboard():
 
 def get_ctrader_inline_keyboard():
     config = load_config(SYMBOLS_CTRADER_FILE, DEFAULT_CTRADER_CONFIG)
+    ai_filter = get_exchange_state(AI_FILTER_CTRADER_FILE, default=True)
+    
     inline_keyboard = []
+    filter_icon = "🟢" if ai_filter else "🔴"
+    inline_keyboard.append([{"text": f"{filter_icon} Фільтрація ШІ (Вердикт)", "callback_data": "toggle_ai_ctrader"}])
+    
     for sym_key, data in config.items():
         enabled = data["enabled"]
         lot = data["lot"]
@@ -363,7 +376,7 @@ def execute_ctrader_move_be(symbol, entry_price):
 # 3. Головна обробка сигналів
 # ----------------------------------------------------
 def process_signal(data):  
-    print(f"Отримано дані від TradingView: {data}") # ДЕБАГ: виводимо весь JSON у логи
+    print(f"Отримано дані від TradingView: {data}") # ДЕБАГ: виводимо весь JSON у логи[cite: 16]
     
     if not data or (float(data.get("price", 0)) == 0 and str(data.get("action", "")).upper() != "MOVE_BE"):
         print(f"Порожній запит або ціна 0. Дані: {data}")
@@ -430,24 +443,36 @@ def process_signal(data):
         ai_verdict = f"Помилка ШІ: {str(e)}"  
 
     trade_report = ""  
-    if "[APPROVED]" in ai_verdict:  
-        if is_fx_or_gold:
-            if get_exchange_state(TRADING_CTRADER_FILE):
-                sym_conf = get_ctrader_symbol_config(ticker)
-                if sym_conf["enabled"]:
+    
+    if is_fx_or_gold:
+        ai_filter_enabled = get_exchange_state(AI_FILTER_CTRADER_FILE, default=True)
+        should_trade = (not ai_filter_enabled) or ("[APPROVED]" in ai_verdict)
+        
+        if get_exchange_state(TRADING_CTRADER_FILE):
+            sym_conf = get_ctrader_symbol_config(ticker)
+            if sym_conf["enabled"]:
+                if should_trade:
                     trade_report = "\n\n" + execute_ctrader_trade(ticker, action, price, sl, tp1, sym_conf["lot"])
                 else:
-                    trade_report = f"\n\n👁 Моніторинг: для `{ticker}` автоторгівлю в cTrader вимкнено."
+                    trade_report = f"\n\n🛑 ШІ відхилив сигнал (`[REJECTED]`), угоду в cTrader пропущено через увімкнену фільтрацію."
             else:
-                trade_report = "\n\n⏸ Автоторгівлю cTrader вимкнено."
+                trade_report = f"\n\n👁 Моніторинг: для `{ticker}` автоторгівлю в cTrader вимкнено."
         else:
-            if get_exchange_state(TRADING_BINGX_FILE):
-                if is_bingx_symbol_enabled(ticker):
+            trade_report = "\n\n⏸ Автоторгівлю cTrader вимкнено."
+    else:
+        ai_filter_enabled = get_exchange_state(AI_FILTER_BINGX_FILE, default=True)
+        should_trade = (not ai_filter_enabled) or ("[APPROVED]" in ai_verdict)
+        
+        if get_exchange_state(TRADING_BINGX_FILE):
+            if is_bingx_symbol_enabled(ticker):
+                if should_trade:
                     trade_report = "\n\n" + execute_bingx_trade(ticker, action, price, sl, tp1, tp2)  
                 else:
-                    trade_report = f"\n\n👁 Моніторинг: для `{ticker}` автоторгівлю на BingX вимкнено."
-            else:  
-                trade_report = "\n\n⏸ Автоторгівлю BingX вимкнено."  
+                    trade_report = f"\n\n🛑 ШІ відхилив сигнал (`[REJECTED]`), угоду на BingX пропущено через увімкнену фільтрацію."
+            else:
+                trade_report = f"\n\n👁 Моніторинг: для `{ticker}` автоторгівлю на BingX вимкнено."
+        else:  
+            trade_report = "\n\n⏸ Автоторгівлю BingX вимкнено."  
 
     msg = (  
         f"⚡️ **НОВИЙ СИГНАЛ: {ticker} ({action})**\n\n"  
@@ -515,7 +540,25 @@ def webhook():
         callback = data["callback_query"]
         cb_data = callback.get("data", "")
         
-        if cb_data.startswith("bingx_"):
+        if cb_data == "toggle_ai_bingx":
+            current = get_exchange_state(AI_FILTER_BINGX_FILE, default=True)
+            set_exchange_state(AI_FILTER_BINGX_FILE, not current)
+            message_id = callback["message"]["message_id"]
+            chat_id = callback["message"]["chat"]["id"]
+            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/editMessageReplyMarkup"
+            requests.post(url, json={"chat_id": chat_id, "message_id": message_id, "reply_markup": get_bingX_inline_keyboard()})
+            requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/answerCallbackQuery", json={"callback_query_id": callback["id"], "text": "Фільтрацію ШІ для BingX змінено!"})
+            
+        elif cb_data == "toggle_ai_ctrader":
+            current = get_exchange_state(AI_FILTER_CTRADER_FILE, default=True)
+            set_exchange_state(AI_FILTER_CTRADER_FILE, not current)
+            message_id = callback["message"]["message_id"]
+            chat_id = callback["message"]["chat"]["id"]
+            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/editMessageReplyMarkup"
+            requests.post(url, json={"chat_id": chat_id, "message_id": message_id, "reply_markup": get_ctrader_inline_keyboard()})
+            requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/answerCallbackQuery", json={"callback_query_id": callback["id"], "text": "Фільтрацію ШІ для cTrader змінено!"})
+
+        elif cb_data.startswith("bingx_"):
             sym_key = cb_data.replace("bingx_", "")
             config = load_config(SYMBOLS_BINGX_FILE, DEFAULT_BINGX_CONFIG)
             if sym_key in config:
