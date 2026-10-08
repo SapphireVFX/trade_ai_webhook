@@ -350,7 +350,13 @@ def refresh_ctrader_token():
     return None
 
 def get_ctrader_access_token():
-    print(f"ДЕБАГ: Перевірка CTRADER_ACCOUNT_ID: {CTRADER_ACCOUNT_ID}")
+    # Спочатку перевіряємо прямий access token з енв Render
+    direct_token = os.environ.get("CTRADER_ACCESS_TOKEN")
+    if direct_token:
+        print("ДЕБАГ: Використовується прямий CTRADER_ACCESS_TOKEN з env Render")
+        return direct_token
+        
+    # Якщо його немає, пробуємо через звичні файли/refresh
     if os.path.exists(CTRADER_TOKEN_FILE):
         try:
             with open(CTRADER_TOKEN_FILE, "r") as f:
