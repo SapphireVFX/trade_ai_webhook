@@ -367,48 +367,50 @@ def execute_ctrader_trade(symbol, action, price, sl, tp1, lot_size):
         return "⚠️ cTrader не авторизовано або відсутній Account ID."
     
     try:
-        # Нормалізація назви символу для cTrader (наприклад, XAUUSD або EURUSD)
         clean_symbol = symbol.replace('.P', '').replace('/', '').replace(':', '').strip().upper()
-        
-        # Перетворення лотів у об'єм (в cTrader об'єм зазвичай задається в центах/юнітах: 1 лот = 100,000, отже 0.01 лота = 1000 одиниць)
+        # В cTrader об'єм задається в сотих долях цента / одиницях базової валюти (1 лот = 100 000)
         volume_units = int(float(lot_size) * 100000)
         trade_side = "BUY" if action.upper() == "BUY" else "SELL"
-        
-        # Приклад формування запиту до OpenAPI cTrader (або відправка через проксі-шлюз)
-        # Оскільки cTrader Open API вимагає підключення через TCP/SSL Protobuf розкладку, 
-        # для REST-зв'язку використовується еспорт або внутрішній міст виконання.
         
         headers = {
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json"
         }
         
-        # Запит на виставлення ринкового ордера через API бркерського рахунку
+        # Офіційний REST ендпоінт OpenAPI Spotware для створення ринкового ордера
+        # (Базовий шлюз OpenAPI редиректить запит на відповідний датацентр брокера)
+        order_url = f"https://api.spotware.com/v1/accounts/{CTRADER_ACCOUNT_ID}/orders"
+        
         payload = {
-            "accountId": int(CTRADER_ACCOUNT_ID),
-            "symbolName": clean_symbol,
+            "symbol": clean_symbol,
             "tradeSide": trade_side,
             "volume": volume_units,
             "orderType": "MARKET",
-            "relativeStopLoss": float(abs(price - sl)) * 100000, # У пунктах/піпсах залежно від специфікації
-            "relativeTakeProfit": float(abs(tp1 - price)) * 100000
+            "stopLoss": float(sl),
+            "takeProfit": float(tp1)
         }
         
-        # Логування для перевірки на сервері Render
-        print(f"Відправка ордера в cTrader OpenAPI: {payload}")
+        print(f"Відправка реального ордера в cTrader OpenAPI: {payload}")
+        res = requests.post(order_url, json=payload, headers=headers, timeout=10)
         
-        # Тут виконується реальний запит на виконання (залежно від вашого бркерського шлюзу FxPro)
-        # res = requests.post(f"{CTRADER_API_URL}/v1/accounts/{CTRADER_ACCOUNT_ID}/orders", json=payload, headers=headers)
+        print(f"Відповідь від cTrader Execution API: статус {res.status_code}, текст: {res.text}")
         
-        return (
-            f"✅ **Успішно відправлено ордер на FxPro cTrader!**\n"
-            f"Інструмент: `{clean_symbol}` ({trade_side})\n"
-            f"Об'єм: `{lot_size}` лотів ({volume_units} одиниць)\n"
-            f"Вхід: `{price}` | SL: `{sl}` | TP1: `{tp1}`\n"
-            f"🏛 Рахунок: `{CTRADER_ACCOUNT_ID}`"
-        )
+        if res.status_code in [200, 201]:
+            resp_data = res.json()
+            order_id = resp_data.get("orderId", "Невідомо")
+            return (
+                f"✅ **Успішно відкрито угоду на FxPro cTrader!**\n"
+                f"Інструмент: `{clean_symbol}` ({trade_side})\n"
+                f"Об'єм: `{lot_size}` лотів ({volume_units} одиниць)\n"
+                f"Вхід: `{price}` | SL: `{sl}` | TP1: `{tp1}`\n"
+                f"🏛 Рахунок: `{CTRADER_ACCOUNT_ID}`\n"
+                f"ID Ордера: `{order_id}`"
+            )
+        else:
+            return f"❌ **Помилка виконання cTrader (Статус {res.status_code}):** {res.text}"
+            
     except Exception as e:
-        return f"❌ **Помилка виконання cTrader ордера:** {str(e)}"
+        return f"❌ **Помилка запиту до cTrader API:** {str(e)}"
 
 def execute_ctrader_move_be(symbol, entry_price):
     access_token = get_ctrader_access_token()
