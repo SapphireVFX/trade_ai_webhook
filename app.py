@@ -292,9 +292,9 @@ def execute_bingx_trade(symbol, action, price, sl, tp1, tp2):
 
         tp_report = ""  
         try:  
-            tp1_amount = float(exchange.amount_to_precision(formatted_symbol, amount * 0.33))  
+            tp1_amount = float(exchange.amount_to_precision(formatted_symbol, amount * 0.5))  
             exchange.create_order(symbol=formatted_symbol, type='TAKE_PROFIT_MARKET', side=sl_side, amount=tp1_amount, params={'stopPrice': tp1_price_formatted, 'positionSide': position_side})  
-            tp_report = f"🎯 **TP1 зафіксовано (33%):** `{tp1_price_formatted}`\n"  
+            tp_report = f"🎯 **TP1 зафіксовано (50%):** `{tp1_price_formatted}`\n"  
         except Exception as tp_err:  
             tp_report = f"⚠️ **Помилка виставлення TP1:** {str(tp_err)}\n"  
 
