@@ -216,7 +216,7 @@ def close_opposite_positions(symbol, new_action):
     except Exception as e: 
         return f"\n⚠ Помилка закриття попередньої позиції: {str(e)}"
 
-def execute_move_be(symbol, entry_price):
+def execute_move_be(symbol, target_be_price):
     if not exchange:
         return "⚠️ BingX API ключі відсутні."
     try:
@@ -232,18 +232,21 @@ def execute_move_be(symbol, entry_price):
                 for ord in open_orders:
                     if ord.get('info', {}).get('positionSide') == pos_side and ord.get('type') == 'STOP_MARKET':
                         exchange.cancel_order(ord['id'], formatted_symbol)
-                sl_price = float(entry_price) if entry_price else float(pos.get('entryPrice', 0))
+                
+                # Використовуємо ціну з буфером, що надійшла з індикатора, або ціну входу як фолбек
+                sl_price = float(target_be_price) if target_be_price else float(pos.get('entryPrice', 0))
                 try:
                     sl_price_formatted = float(exchange.price_to_precision(formatted_symbol, sl_price))
                 except Exception:
                     sl_price_formatted = sl_price
+                
                 exchange.create_order(symbol=formatted_symbol, type='STOP_MARKET', side=sl_side, amount=contracts, params={'stopPrice': sl_price_formatted, 'positionSide': pos_side})
-                be_reports.append(f"🛡 **Stop Loss перенесено в BE (`{sl_price_formatted}`) для {formatted_symbol} ({pos_side})**")
+                be_reports.append(f"🛡 **Stop Loss перенесено в BE з буфером комісій (`{sl_price_formatted}`) для {formatted_symbol} ({pos_side})**")
         return "\n".join(be_reports) if be_reports else f"ℹ️ Для {formatted_symbol} не знайдено відкритих позицій."
     except Exception as e:
         return f"⚠ Помилка переносу SL в BE: {str(e)}"
 
-def execute_bingx_trade(symbol, action, price, sl, tp1, tp2):  
+def execute_bingx_trade(symbol, action, price, sl, tp1, tp2, tp3):  
     if not exchange:  
         return "⚠️ BingX API ключі не знайдені."  
     try:  
@@ -278,11 +281,16 @@ def execute_bingx_trade(symbol, action, price, sl, tp1, tp2):
             amount = float(exchange.amount_to_precision(formatted_symbol, amount))  
             sl_price_formatted = float(exchange.price_to_precision(formatted_symbol, sl))  
             tp1_price_formatted = float(exchange.price_to_precision(formatted_symbol, tp1))  
+            tp2_price_formatted = float(exchange.price_to_precision(formatted_symbol, tp2)) if tp2 else 0
+            tp3_price_formatted = float(exchange.price_to_precision(formatted_symbol, tp3)) if tp3 else 0
         except Exception:  
             sl_price_formatted = float(sl)  
-            tp1_price_formatted = float(tp1)  
+            tp1_price_formatted = float(tp1)
+            tp2_price_formatted = float(tp2) if tp2 else 0
+            tp3_price_formatted = float(tp3) if tp3 else 0
 
         order = exchange.create_order(symbol=formatted_symbol, type='market', side=side, amount=amount, params={'positionSide': position_side})  
+        
         sl_report = ""  
         try:  
             exchange.create_order(symbol=formatted_symbol, type='STOP_MARKET', side=sl_side, amount=amount, params={'stopPrice': sl_price_formatted, 'positionSide': position_side})  
@@ -291,12 +299,32 @@ def execute_bingx_trade(symbol, action, price, sl, tp1, tp2):
             sl_report = f"⚠️ **Помилка виставлення SL:** {str(sl_err)}\n"  
 
         tp_report = ""  
+        # TP1 (50%)
         try:  
-            tp1_amount = float(exchange.amount_to_precision(formatted_symbol, amount * 0.5))  
-            exchange.create_order(symbol=formatted_symbol, type='TAKE_PROFIT_MARKET', side=sl_side, amount=tp1_amount, params={'stopPrice': tp1_price_formatted, 'positionSide': position_side})  
-            tp_report = f"🎯 **TP1 зафіксовано (50%):** `{tp1_price_formatted}`\n"  
-        except Exception as tp_err:  
-            tp_report = f"⚠️ **Помилка виставлення TP1:** {str(tp_err)}\n"  
+            tp1_amount = float(exchange.amount_to_precision(formatted_symbol, amount * 0.50))  
+            if tp1_amount > 0:
+                exchange.create_order(symbol=formatted_symbol, type='TAKE_PROFIT_MARKET', side=sl_side, amount=tp1_amount, params={'stopPrice': tp1_price_formatted, 'positionSide': position_side})  
+                tp_report += f"🎯 **TP1 (50%):** `{tp1_price_formatted}`\n"  
+        except Exception as tp1_err:  
+            tp_report += f"⚠️ **Помилка TP1:** {str(tp1_err)}\n"  
+
+        # TP2 (25%)
+        try:  
+            tp2_amount = float(exchange.amount_to_precision(formatted_symbol, amount * 0.25))  
+            if tp2_amount > 0 and tp2_price_formatted > 0:
+                exchange.create_order(symbol=formatted_symbol, type='TAKE_PROFIT_MARKET', side=sl_side, amount=tp2_amount, params={'stopPrice': tp2_price_formatted, 'positionSide': position_side})  
+                tp_report += f"🎯 **TP2 (25%):** `{tp2_price_formatted}`\n"  
+        except Exception as tp2_err:  
+            tp_report += f"⚠️ **Помилка TP2:** {str(tp2_err)}\n"  
+
+        # TP3 (25%)
+        try:  
+            tp3_amount = float(exchange.amount_to_precision(formatted_symbol, amount * 0.25))  
+            if tp3_amount > 0 and tp3_price_formatted > 0:
+                exchange.create_order(symbol=formatted_symbol, type='TAKE_PROFIT_MARKET', side=sl_side, amount=tp3_amount, params={'stopPrice': tp3_price_formatted, 'positionSide': position_side})  
+                tp_report += f"🎯 **TP3 (25%):** `{tp3_price_formatted}`\n"  
+        except Exception as tp3_err:  
+            tp_report += f"⚠️ **Помилка TP3:** {str(tp3_err)}\n"  
 
         return (  
             f"✅ **Угоду успішно відкрито на BingX Futures!**\n"  
@@ -311,23 +339,19 @@ def execute_bingx_trade(symbol, action, price, sl, tp1, tp2):
 # ----------------------------------------------------
 # 2. cTrader (FxPro) Торгові функції та токени
 # ----------------------------------------------------
-CTRADER_API_URL = "https://api.spotware.com" # Базовий шлюз OpenAPI (або брокерський ендпоінт)
+CTRADER_API_URL = "https://api.spotware.com"
 
 def refresh_ctrader_token():
     refresh_token = CTRADER_REFRESH_TOKEN_ENV
-    print(f"ДЕБАГ: CTRADER_REFRESH_TOKEN з env наявний: {bool(refresh_token)}")
     if not refresh_token and os.path.exists(CTRADER_TOKEN_FILE):
         try:
             with open(CTRADER_TOKEN_FILE, "r") as f:
                 token_data = json.load(f)
             refresh_token = token_data.get("refresh_token")
-            print("ДЕБАГ: Знайдено refresh_token у локальному файлі token.json")
-        except Exception as e:
-            print(f"ДЕБАГ: Помилка читання файлу токена: {e}")
+        except Exception:
             pass
             
     if not refresh_token:
-        print("ДЕБАГ: Refresh token взагалі відсутній!")
         return None
         
     try:
@@ -339,7 +363,6 @@ def refresh_ctrader_token():
             "refresh_token": refresh_token
         }
         res = requests.post(token_url, data=payload)
-        print(f"ДЕБАГ: Відповідь від Spotware token API: статус {res.status_code}, текст: {res.text}")
         if res.status_code == 200:
             new_token_data = res.json()
             with open(CTRADER_TOKEN_FILE, "w") as f:
@@ -350,13 +373,10 @@ def refresh_ctrader_token():
     return None
 
 def get_ctrader_access_token():
-    # Спочатку перевіряємо прямий access token з енв Render
     direct_token = os.environ.get("CTRADER_ACCESS_TOKEN")
     if direct_token:
-        print("ДЕБАГ: Використовується прямий CTRADER_ACCESS_TOKEN з env Render")
         return direct_token
         
-    # Якщо його немає, пробуємо через звичні файли/refresh
     if os.path.exists(CTRADER_TOKEN_FILE):
         try:
             with open(CTRADER_TOKEN_FILE, "r") as f:
@@ -374,7 +394,6 @@ def execute_ctrader_trade(symbol, action, price, sl, tp1, lot_size):
     
     try:
         clean_symbol = symbol.replace('.P', '').replace('/', '').replace(':', '').strip().upper()
-        # В cTrader об'єм задається в сотих долях цента / одиницях базової валюти (1 лот = 100 000)
         volume_units = int(float(lot_size) * 100000)
         trade_side = "BUY" if action.upper() == "BUY" else "SELL"
         
@@ -383,8 +402,6 @@ def execute_ctrader_trade(symbol, action, price, sl, tp1, lot_size):
             "Content-Type": "application/json"
         }
         
-        # Офіційний REST ендпоінт OpenAPI Spotware для створення ринкового ордера
-        # (Базовий шлюз OpenAPI редиректить запит на відповідний датацентр брокера)
         order_url = f"https://api.spotware.com/v1/accounts/{CTRADER_ACCOUNT_ID}/orders"
         
         payload = {
@@ -396,10 +413,7 @@ def execute_ctrader_trade(symbol, action, price, sl, tp1, lot_size):
             "takeProfit": float(tp1)
         }
         
-        print(f"Відправка реального ордера в cTrader OpenAPI: {payload}")
         res = requests.post(order_url, json=payload, headers=headers, timeout=10)
-        
-        print(f"Відповідь від cTrader Execution API: статус {res.status_code}, текст: {res.text}")
         
         if res.status_code in [200, 201]:
             resp_data = res.json()
@@ -424,19 +438,13 @@ def execute_ctrader_move_be(symbol, entry_price):
         return "⚠️ cTrader не авторизовано."
     
     clean_symbol = symbol.replace('.P', '').replace('/', '').replace(':', '').strip().upper()
-    return f"🛡 **cTrader BE:** Надіслано запит на перенесення SL в безубиток (`{entry_price}`) для `{clean_symbol}`."
+    return f"🛡 **cTrader BE:** Надіслано запит на перенесення SL в безубиток з буфером (`{entry_price}`) для `{clean_symbol}`."
 
 # ----------------------------------------------------
 # 3. Головна обробка сигналів
 # ----------------------------------------------------
-# ----------------------------------------------------
-# 3. Головна обробка сигналів
-# ----------------------------------------------------
 def process_signal(data):  
-    print(f"Отримано дані від TradingView: {data}") # ДЕБАГ: виводимо весь JSON у логи
-    
     if not data or (float(data.get("price", 0)) == 0 and str(data.get("action", "")).upper() != "MOVE_BE"):
-        print(f"Порожній запит або ціна 0. Дані: {data}")
         return
 
     action = str(data.get("action", "BUY")).upper()  
@@ -445,7 +453,6 @@ def process_signal(data):
     is_fx_or_gold = "XAU" in raw_ticker or "GOLD" in raw_ticker or raw_ticker in ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "NZDUSD", "USDCHF"]
 
     if is_fx_or_gold and is_weekend_closed():
-        print(f"ℹ Сигнал {action} для {ticker} проігноровано (ринок закритий на вихідні).")
         return
   
     if action == "MOVE_BE":
@@ -494,7 +501,7 @@ def process_signal(data):
             model="gpt-4o-mini",  
             messages=[{"role": "user", "content": prompt}],  
             max_tokens=750,
-            timeout=15  # Обмежуємо час очікування відповіді від ШІ до 15 секунд
+            timeout=15  
         )  
         ai_verdict = response.choices[0].message.content  
     except Exception as e:  
@@ -524,7 +531,7 @@ def process_signal(data):
         if get_exchange_state(TRADING_BINGX_FILE):
             if is_bingx_symbol_enabled(ticker):
                 if should_trade:
-                    trade_report = "\n\n" + execute_bingx_trade(ticker, action, price, sl, tp1, tp2)  
+                    trade_report = "\n\n" + execute_bingx_trade(ticker, action, price, sl, tp1, tp2, tp3)  
                 else:
                     trade_report = f"\n\n🛑 ШІ відхилив сигнал (`[REJECTED]`), угоду на BingX пропущено через увімкнену фільтрацію."
             else:
@@ -536,7 +543,9 @@ def process_signal(data):
         f"⚡️ **НОВИЙ СИГНАЛ: {ticker} ({action})**\n\n"  
         f"📍 **Вхід:** `{price}`\n"  
         f"🛑 **SL:** `{sl}`\n"  
-        f"🎯 **TP1:** `{tp1}`\n\n"  
+        f"🎯 **TP1 (50%):** `{tp1}`\n"  
+        f"🎯 **TP2 (25%):** `{tp2}`\n"  
+        f"🎯 **TP3 (25%):** `{tp3}`\n\n"  
         f"🤖 **Аналіз ШІ:**\n{ai_verdict}{trade_report}"  
     )  
     send_telegram(msg, get_main_keyboard())
